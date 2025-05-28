@@ -1,26 +1,205 @@
 @import "tailwindcss";
 
+@theme {
+  --color-notion-gray-50: #0A0A0A;
+  --color-notion-gray-100: #171717;
+  --color-notion-gray-200: #262626;
+  --color-notion-gray-300: #404040;
+  --color-notion-gray-400: #525252;
+  --color-notion-gray-500: #737373;
+  --color-notion-gray-600: #A3A3A3;
+  --color-notion-gray-700: #D4D4D4;
+  --color-notion-gray-800: #E5E5E5;
+  --color-notion-gray-900: #F7F7F7;
+  --color-notion-blue: #3B82F6;
+  --color-notion-green: #10B981;
+  --color-notion-red: #EF4444;
+  
+  --radius-notion: 3px;
+  --shadow-notion: 0 1px 3px rgba(255,255,255,0.1);
+  --shadow-notion-hover: 0 2px 8px rgba(255,255,255,0.15);
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: 0 0 0;
+  --foreground: 255 255 255;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  color: rgb(var(--foreground));
+  background: rgb(var(--background));
+  font-family: 'JetBrains Mono', 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Fira Mono', 'Droid Sans Mono', 'Courier New', monospace;
+}
+
+/* Custom utility classes */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  background-color: var(--color-notion-blue);
+  color: white;
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--radius-notion);
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: all 0.2s;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: #0052A3;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 102, 204, 0.2);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  background-color: var(--color-notion-gray-100);
+  color: var(--color-notion-gray-800);
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--color-notion-gray-200);
+  border-radius: var(--radius-notion);
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: all 0.2s;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--color-notion-gray-200);
+  border-color: var(--color-notion-gray-300);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(255, 255, 255, 0.05);
+}
+
+.btn-secondary:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.input-field {
+  width: 100%;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--color-notion-gray-200);
+  border-radius: var(--radius-notion);
+  font-size: 0.875rem;
+}
+
+.input-field:focus {
+  outline: none;
+  border-color: var(--color-notion-blue);
+  box-shadow: 0 0 0 1px var(--color-notion-blue);
+}
+
+.table-header {
+  background-color: var(--color-notion-gray-50);
+  color: var(--color-notion-gray-600);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.table-row {
+  border-bottom: 1px solid var(--color-notion-gray-100);
+  transition: background-color 0.2s;
+}
+
+.table-row:hover {
+  background-color: var(--color-notion-gray-50);
+}
+
+.card {
+  background-color: var(--color-notion-gray-100);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  box-shadow: var(--shadow-notion);
+  transition: box-shadow 0.2s;
+  border: 1px solid var(--color-notion-gray-200);
+}
+
+.card:hover {
+  box-shadow: var(--shadow-notion-hover);
+  border-color: var(--color-notion-gray-300);
+}
+
+.tab-active {
+  border-bottom: 2px solid var(--color-notion-blue);
+  color: var(--color-notion-blue);
+  font-weight: 500;
+}
+
+.tab-inactive {
+  color: var(--color-notion-gray-500);
+  transition: color 0.2s;
+}
+
+.tab-inactive:hover {
+  color: var(--color-notion-gray-700);
+}
+
+.loading-spinner {
+  animation: spin 1s linear infinite;
+  height: 0.75rem;
+  width: 0.75rem;
+  border: 2px solid var(--color-notion-gray-700);
+  border-top-color: var(--color-notion-blue);
+  border-radius: 50%;
+  display: inline-block;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Card flip animation */
+.card-container {
+  perspective: 1000px;
+}
+
+.card-flip {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.5s;
+  transform-style: preserve-3d;
+  cursor: pointer;
+}
+
+.card-flip.flipped {
+  transform: rotateY(180deg);
+}
+
+.card-face {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  backface-visibility: hidden;
+}
+
+.card-back {
+  transform: rotateY(180deg);
 }
