@@ -9,6 +9,8 @@ export interface WordEntry {
   imageStatus: 'none' | 'queued' | 'processing' | 'completed' | 'error';
   promptStatus: 'none' | 'generating' | 'completed' | 'error';
   replicateId?: string;
+  qaScore?: 'good' | 'bad' | null;
+  imageGeneratedAt?: string; // ISO timestamp when image was generated
 }
 
 export interface AppState {

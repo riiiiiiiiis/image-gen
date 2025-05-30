@@ -67,15 +67,15 @@ Uses monospace aesthetic with dark theme:
 ### External API Integrations
 
 **Gemini API**:
-- Model: `gemini-2.5-flash-preview-0520`
+- Model: `gemini-2.5-flash-preview-05-20` (Latest Gemini 2.5 Flash Preview)
 - Specialized prompt engineering for emoji-suitable scene descriptions
 - Error handling for API key validation and rate limits
 
 **Replicate API**:
 - Model: `fofr/sdxl-emoji:dee76b5afde21b0f01ed7925f0665b7e879c50ee718c5f78a9d38e04d523cc5e`
 - Uses `replicate.run()` pattern (not predictions API)
-- Prompt format: `"A TOK emoji of ${user_prompt}"`
-- Parameters: 1024x1024, lora_scale 0.6, no watermark
+- Prompt format: `"TOK emoji of ${user_prompt}"` (IMPORTANT: Must start with "TOK emoji of" - this is the key trigger for the model style)
+- Parameters: 1110x834, lora_scale 0.6, no watermark
 
 ### Table Implementation
 

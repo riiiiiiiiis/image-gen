@@ -1,5 +1,8 @@
 import Replicate from 'replicate';
 import { NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
+import { getReplicateModel, createReplicateInput } from '@/lib/replicateConfig';
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN!,
@@ -7,9 +10,9 @@ const replicate = new Replicate({
 
 export async function POST(request: Request) {
   try {
-    const { prompt, entryId } = await request.json();
+    const { prompt, entryId, englishWord } = await request.json();
 
-    if (!prompt || !entryId) {
+    if (!prompt || !entryId || !englishWord) {
       return NextResponse.json(
         { error: 'Missing required fields' },
         { status: 400 }
@@ -17,22 +20,9 @@ export async function POST(request: Request) {
     }
 
     const output = await replicate.run(
-      "fofr/sdxl-emoji:dee76b5afde21b0f01ed7925f0665b7e879c50ee718c5f78a9d38e04d523cc5e",
+      getReplicateModel(),
       {
-        input: {
-          prompt: `A TOK emoji of ${prompt}`,
-          negative_prompt: "blurry, bad quality, distorted, deformed",
-          width: 1024,
-          height: 1024,
-          num_outputs: 1,
-          num_inference_steps: 50,
-          guidance_scale: 7.5,
-          scheduler: "K_EULER",
-          lora_scale: 0.6,
-          refine: "no_refiner",
-          apply_watermark: false,
-          disable_safety_checker: false,
-        },
+        input: createReplicateInput(prompt),
       }
     );
 
@@ -46,13 +36,13 @@ export async function POST(request: Request) {
     
     if (Array.isArray(output) && output.length > 0) {
       // Get the first FileOutput object and call .url() to get the URL
-      const fileOutput = output[0];
+      const fileOutput = output[0] as any;
       const urlResult = fileOutput.url ? fileOutput.url() : fileOutput.toString();
       imageUrl = urlResult.toString(); // Convert URL object to string
       console.log('Extracted imageUrl from FileOutput:', imageUrl);
     } else if (output && typeof output === 'object' && 'url' in output) {
       // Handle case where it might be a single FileOutput object
-      const urlResult = output.url();
+      const urlResult = (output as any).url();
       imageUrl = urlResult.toString(); // Convert URL object to string
       console.log('Extracted imageUrl from single FileOutput:', imageUrl);
     } else if (typeof output === 'string') {
@@ -73,10 +63,53 @@ export async function POST(request: Request) {
       );
     }
 
-    return NextResponse.json({ 
-      imageUrl,
-      status: 'completed',
-    });
+    // Download and save the image locally
+    try {
+      console.log('Downloading image from:', imageUrl);
+      const response = await fetch(imageUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.statusText}`);
+      }
+      
+      const imageBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(imageBuffer);
+      
+      // Create images directory if it doesn't exist
+      const imagesDir = path.join(process.cwd(), 'public', 'images');
+      if (!fs.existsSync(imagesDir)) {
+        fs.mkdirSync(imagesDir, { recursive: true });
+      }
+      
+      // Use entry ID as filename - simple and unique
+      const filename = `${entryId}.png`;
+      const filepath = path.join(imagesDir, filename);
+      
+      // Save the file
+      fs.writeFileSync(filepath, buffer);
+      console.log('Image saved to:', filepath);
+      
+      // Return both the original URL and the local path with cache-busting timestamp
+      const timestamp = Date.now();
+      const localImageUrl = `/images/${filename}?t=${timestamp}`;
+      const generatedAt = new Date().toISOString();
+      
+      return NextResponse.json({ 
+        imageUrl: localImageUrl, // Return local path with cache-buster for the app to use
+        originalUrl: imageUrl,    // Keep original URL as backup
+        localPath: filepath,
+        filename: filename,
+        status: 'completed',
+        generatedAt: generatedAt, // Add timestamp for sorting
+      });
+    } catch (downloadError) {
+      console.error('Error downloading/saving image:', downloadError);
+      // If download fails, still return the original URL
+      return NextResponse.json({ 
+        imageUrl,
+        status: 'completed',
+        downloadError: 'Failed to save image locally, using remote URL',
+      });
+    }
   } catch (error: any) {
     console.error('Error generating image:', error);
     

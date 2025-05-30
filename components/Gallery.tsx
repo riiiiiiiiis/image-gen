@@ -1,41 +1,132 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { WordEntry } from '@/types';
-import { Download, Filter, X } from 'lucide-react';
+import { Download, Filter, X, RefreshCw } from 'lucide-react';
 import Image from 'next/image';
 import toast from 'react-hot-toast';
 import { activityManager } from './ActivityLog';
 
 export default function Gallery() {
-  const { entries, levelFilter, setLevelFilter } = useAppStore();
-  const [flippedCards, setFlippedCards] = useState<Set<number>>(new Set());
+  const { entries, updateEntry } = useAppStore();
+  const [qaFilter, setQaFilter] = useState<'all' | 'good' | 'bad' | 'unrated'>('all');
+  const [galleryImages, setGalleryImages] = useState<any[]>([]);
+
+  // Load gallery images from JSON
+  useEffect(() => {
+    fetch('/api/gallery')
+      .then(res => res.json())
+      .then(data => setGalleryImages(data.images || []))
+      .catch(err => console.error('Failed to load gallery:', err));
+  }, []);
 
   const entriesWithImages = useMemo(() => {
     return entries.filter(entry => entry.imageUrl && entry.imageStatus === 'completed');
   }, [entries]);
 
+  // Combine entries with standalone gallery images
+  const allImages = useMemo(() => {
+    const entryImages = entriesWithImages.map(entry => ({
+      ...entry,
+      source: 'entries'
+    }));
+    
+    const standaloneImages = galleryImages
+      .filter(img => !entriesWithImages.find(entry => entry.id === img.id))
+      .map(img => {
+        // Find matching entry from all entries (including those without images)
+        const matchingEntry = entries.find(entry => entry.id === img.id);
+        
+        return {
+          id: img.id,
+          original_text: matchingEntry?.original_text || `Image ${img.id}`,
+          translation_text: matchingEntry?.translation_text || '',
+          transcription: matchingEntry?.transcription || '',
+          imageUrl: `/images/${img.id}.png`,
+          imageStatus: 'completed',
+          source: 'gallery',
+          prompt: matchingEntry?.prompt
+        };
+      });
+    
+    return [...entryImages, ...standaloneImages];
+  }, [entriesWithImages, galleryImages, entries]);
+
   const filteredEntries = useMemo(() => {
-    if (levelFilter === null) return entriesWithImages;
-    return entriesWithImages.filter(entry => entry.level_id === levelFilter);
-  }, [entriesWithImages, levelFilter]);
-
-  const levels = useMemo(() => {
-    const uniqueLevels = Array.from(new Set(entries.map(e => e.level_id)));
-    return uniqueLevels.sort((a, b) => a - b);
-  }, [entries]);
-
-  const handleFlip = (id: number) => {
-    setFlippedCards(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(id)) {
-        newSet.delete(id);
-      } else {
-        newSet.add(id);
-      }
-      return newSet;
+    let filtered = allImages;
+    
+    // Apply QA filter
+    if (qaFilter === 'good') {
+      filtered = filtered.filter(entry => entry.qaScore === 'good');
+    } else if (qaFilter === 'bad') {
+      filtered = filtered.filter(entry => entry.qaScore === 'bad');
+    } else if (qaFilter === 'unrated') {
+      filtered = filtered.filter(entry => !entry.qaScore);
+    }
+    
+    // Sort by generation date - newest images first
+    filtered.sort((a, b) => {
+      const dateA = a.imageGeneratedAt ? new Date(a.imageGeneratedAt).getTime() : 0;
+      const dateB = b.imageGeneratedAt ? new Date(b.imageGeneratedAt).getTime() : 0;
+      return dateB - dateA; // Descending order - newest first, oldest last
     });
+    
+    return filtered;
+  }, [allImages, qaFilter]);
+
+  const handleQaScore = (entryId: number, score: 'good' | 'bad') => {
+    updateEntry(entryId, { qaScore: score });
+    toast.success(`Marked as ${score === 'good' ? '✅ Good' : '❌ Bad'}`);
+  };
+
+  const handleRegenerateImage = async (entry: WordEntry) => {
+    if (!entry.prompt) {
+      toast.error('No prompt available for regeneration');
+      return;
+    }
+
+    const operationKey = `regen-image-${entry.id}`;
+    updateEntry(entry.id, { imageStatus: 'queued' });
+    activityManager.addActivity('loading', `Queuing regeneration for "${entry.original_text}"`, undefined, operationKey);
+    
+    try {
+      const response = await fetch('/api/queue-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add',
+          entryId: entry.id,
+          englishWord: entry.original_text,
+          prompt: entry.prompt,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+
+      const { status, imageUrl, generatedAt } = await response.json();
+      
+      if (status === 'completed' && imageUrl) {
+        updateEntry(entry.id, { 
+          imageUrl, 
+          imageStatus: 'completed',
+          qaScore: null, // Reset QA score for new image
+          imageGeneratedAt: generatedAt // Update generation timestamp
+        });
+        activityManager.addActivity('success', `Image regenerated for "${entry.original_text}"`, undefined, operationKey);
+        toast.success('Image regenerated successfully');
+      } else {
+        throw new Error('Failed to regenerate image');
+      }
+    } catch (error) {
+      updateEntry(entry.id, { imageStatus: 'completed' }); // Revert to previous state
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      activityManager.addActivity('error', `Failed to regenerate image for "${entry.original_text}"`, errorMessage, operationKey);
+      toast.error(`Failed to regenerate: ${errorMessage}`);
+    }
   };
 
   const handleDownload = async (entry: WordEntry) => {
@@ -94,12 +185,12 @@ export default function Gallery() {
     }
   };
 
-  if (entriesWithImages.length === 0) {
+  if (allImages.length === 0) {
     return (
       <div className="text-center py-12">
-        <p className="text-gray-400">No images generated yet</p>
+        <p className="text-gray-400">No images found</p>
         <p className="text-sm mt-2 text-gray-500">
-          Go to the Data Table tab to generate images
+          Go to the Data Table tab to generate images or add images to public/images/
         </p>
       </div>
     );
@@ -111,14 +202,14 @@ export default function Gallery() {
       <div className="flex justify-between items-center">
         <div className="flex gap-4 items-center">
           <select
-            value={levelFilter || ''}
-            onChange={(e) => setLevelFilter(e.target.value ? Number(e.target.value) : null)}
-            className="input-field w-32"
+            value={qaFilter}
+            onChange={(e) => setQaFilter(e.target.value as 'all' | 'good' | 'bad' | 'unrated')}
+            className="input-field w-40"
           >
-            <option value="">All Levels</option>
-            {levels.map(level => (
-              <option key={level} value={level}>Level {level}</option>
-            ))}
+            <option value="all">All Images</option>
+            <option value="good">✅ Good Images</option>
+            <option value="bad">❌ Bad Images</option>
+            <option value="unrated">⚪ Unrated</option>
           </select>
           
           <span className="text-sm text-gray-400">
@@ -133,47 +224,74 @@ export default function Gallery() {
       </div>
 
       {/* Gallery Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-3">
         {filteredEntries.map((entry) => {
-          const isFlipped = flippedCards.has(entry.id);
-          
           return (
-            <div key={entry.id} className="card-container">
-              <div
-                className={`card-flip ${isFlipped ? 'flipped' : ''}`}
-                onClick={() => handleFlip(entry.id)}
-              >
-                {/* Front - Image */}
-                <div className="card-face card-front">
-                  <div className="relative w-full aspect-[4/3] mb-4">
-                    <Image
-                      src={entry.imageUrl!}
-                      alt={entry.original_text}
-                      fill
-                      className="object-cover rounded-lg"
-                    />
+            <div key={entry.id} className="bg-gray-900 border border-gray-700 rounded overflow-hidden group hover:border-gray-600 transition-colors">
+              {/* Compact Image Display */}
+              <div className="relative w-full aspect-square">
+                <img
+                  src={entry.imageUrl!}
+                  alt={entry.original_text}
+                  className="w-full h-full object-contain bg-gray-800"
+                />
+                
+                {/* QA Score Indicator */}
+                {entry.qaScore && (
+                  <div className="absolute top-1 right-1 w-5 h-5 rounded-full text-xs flex items-center justify-center bg-black/60">
+                    {entry.qaScore === 'good' ? '✅' : '❌'}
                   </div>
-                  <h3 className="font-medium text-gray-100">{entry.original_text}</h3>
-                  <p className="text-sm text-gray-400">{entry.transcription}</p>
-                  <p className="text-sm mt-1 text-gray-300">{entry.translation_text}</p>
-                  <div className="mt-2 text-xs text-gray-500">Level {entry.level_id}</div>
+                )}
+              </div>
+              
+              {/* Compact Card Info */}
+              <div className="p-2 space-y-2">
+                {/* Word Info */}
+                <div>
+                  <h3 className="font-medium text-gray-100 text-sm truncate" title={entry.original_text}>
+                    {entry.original_text}
+                  </h3>
+                  <p className="text-xs text-gray-400 truncate" title={entry.translation_text}>
+                    {entry.translation_text}
+                  </p>
+                  <div className="text-xs text-gray-500">ID: {entry.id}</div>
                 </div>
                 
-                {/* Back - Prompt */}
-                <div className="card-face card-back">
-                  <h3 className="font-medium mb-4 text-gray-100">Generated Prompt</h3>
-                  <p className="text-sm leading-relaxed text-gray-300">
-                    {entry.prompt}
-                  </p>
+                {/* Compact Buttons */}
+                <div className="flex gap-1">
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDownload(entry);
-                    }}
-                    className="btn-secondary mt-4 w-full"
+                    onClick={() => handleQaScore(entry.id, 'good')}
+                    className={`flex-1 py-1 px-2 rounded text-xs transition-colors ${
+                      entry.qaScore === 'good'
+                        ? 'bg-green-600 text-white'
+                        : 'bg-gray-800 text-gray-300 hover:bg-green-600/20'
+                    }`}
+                    title="Mark as good"
                   >
-                    <Download className="h-3 w-3" />
-                    [DOWNLOAD]
+                    ✅
+                  </button>
+                  <button
+                    onClick={() => handleQaScore(entry.id, 'bad')}
+                    className={`flex-1 py-1 px-2 rounded text-xs transition-colors ${
+                      entry.qaScore === 'bad'
+                        ? 'bg-red-600 text-white'
+                        : 'bg-gray-800 text-gray-300 hover:bg-red-600/20'
+                    }`}
+                    title="Mark as bad"
+                  >
+                    ❌
+                  </button>
+                  <button
+                    onClick={() => handleRegenerateImage(entry)}
+                    disabled={entry.imageStatus === 'processing'}
+                    className="flex-1 py-1 px-2 bg-blue-800 text-blue-300 hover:bg-blue-700 disabled:bg-gray-800 disabled:text-gray-500 rounded text-xs transition-colors"
+                    title="Regenerate image"
+                  >
+                    {entry.imageStatus === 'processing' ? (
+                      <div className="loading-spinner h-3 w-3 mx-auto" />
+                    ) : (
+                      <RefreshCw className="h-3 w-3 mx-auto" />
+                    )}
                   </button>
                 </div>
               </div>

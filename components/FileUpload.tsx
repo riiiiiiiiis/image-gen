@@ -26,7 +26,8 @@ export default function FileUpload() {
     const file = acceptedFiles[0];
     if (!file) return;
 
-    activityManager.addActivity('loading', `Processing ${file.name}...`);
+    const operationKey = `upload-${Date.now()}`;
+    activityManager.addActivity('loading', `Processing ${file.name}...`, undefined, operationKey);
 
     try {
       const text = await file.text();
@@ -55,11 +56,11 @@ export default function FileUpload() {
       setEntries(entries);
       
       const levels = [...new Set(entries.map(e => e.level_id))].length;
-      activityManager.addActivity('success', `Loaded ${entries.length} entries`, `${levels} difficulty levels found`);
+      activityManager.addActivity('success', `Loaded ${entries.length} entries`, `${levels} difficulty levels found`, operationKey);
     } catch (error) {
       console.error('Error processing file:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to process file';
-      activityManager.addActivity('error', 'Failed to process file', errorMessage);
+      activityManager.addActivity('error', 'Failed to process file', errorMessage, operationKey);
     }
   }, [setEntries]);
 

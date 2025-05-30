@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -34,13 +34,49 @@ export default function DataTable() {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<string>('');
+  const [showBatchMenu, setShowBatchMenu] = useState(false);
+  const [imageFilter, setImageFilter] = useState<'all' | 'with' | 'without' | 'bad'>('all');
+  const [promptFilter, setPromptFilter] = useState<'all' | 'with' | 'without'>('all');
+  const batchMenuRef = useRef<HTMLDivElement>(null);
 
-  const filteredData = useMemo(() => getFilteredEntries(), [getFilteredEntries, entries]);
+  const filteredData = useMemo(() => {
+    let data = getFilteredEntries();
+    
+    // Apply prompt filter
+    if (promptFilter === 'with') {
+      data = data.filter(entry => entry.prompt && entry.prompt.trim() !== '');
+    } else if (promptFilter === 'without') {
+      data = data.filter(entry => !entry.prompt || entry.prompt.trim() === '');
+    }
+    
+    // Apply image filter
+    if (imageFilter === 'with') {
+      data = data.filter(entry => entry.imageUrl && entry.imageStatus === 'completed');
+    } else if (imageFilter === 'without') {
+      data = data.filter(entry => !entry.imageUrl || entry.imageStatus !== 'completed');
+    } else if (imageFilter === 'bad') {
+      data = data.filter(entry => entry.qaScore === 'bad');
+    }
+    
+    return data;
+  }, [getFilteredEntries, entries, imageFilter, promptFilter]);
 
-  const levels = useMemo(() => {
-    const uniqueLevels = Array.from(new Set(entries.map(e => e.level_id)));
-    return uniqueLevels.sort((a, b) => a - b);
-  }, [entries]);
+  // Click outside handler for batch menu
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (batchMenuRef.current && !batchMenuRef.current.contains(event.target as Node)) {
+        setShowBatchMenu(false);
+      }
+    };
+
+    if (showBatchMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showBatchMenu]);
 
   const handleGeneratePrompt = async (entry: WordEntry) => {
     const operationKey = `prompt-${entry.id}`;
@@ -74,19 +110,24 @@ export default function DataTable() {
   };
 
   const handleGenerateImage = async (entry: WordEntry) => {
-    if (!entry.prompt) return;
+    if (!entry.prompt) {
+      toast.error(`No prompt available for "${entry.original_text}". Generate prompt first.`);
+      return;
+    }
 
     const operationKey = `image-${entry.id}`;
-    updateEntry(entry.id, { imageStatus: 'processing' });
-    activityManager.addActivity('loading', `Generating image for "${entry.original_text}"`, undefined, operationKey);
+    updateEntry(entry.id, { imageStatus: 'queued' });
+    activityManager.addActivity('loading', `Queuing image for "${entry.original_text}"`, undefined, operationKey);
     
     try {
-      const response = await fetch('/api/generate-image', {
+      const response = await fetch('/api/queue-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: entry.prompt,
+          action: 'add',
           entryId: entry.id,
+          englishWord: entry.original_text,
+          prompt: entry.prompt,
         }),
       });
 
@@ -95,10 +136,14 @@ export default function DataTable() {
         throw new Error(errorData.error || `HTTP ${response.status}`);
       }
 
-      const { imageUrl, status } = await response.json();
+      const { status, imageUrl, generatedAt } = await response.json();
       
       if (status === 'completed' && imageUrl) {
-        updateEntry(entry.id, { imageUrl, imageStatus: 'completed' });
+        updateEntry(entry.id, { 
+          imageUrl, 
+          imageStatus: 'completed',
+          imageGeneratedAt: generatedAt 
+        });
         activityManager.addActivity('success', `Image generated for "${entry.original_text}"`, undefined, operationKey);
       } else {
         throw new Error('Failed to generate image');
@@ -126,6 +171,84 @@ export default function DataTable() {
   const handleCancelEdit = () => {
     setEditingId(null);
     setEditingPrompt('');
+  };
+
+  const handleBatchGeneratePrompts = async (count: number) => {
+    // Get entries without prompts
+    const entriesWithoutPrompts = filteredData
+      .filter(entry => !entry.prompt || entry.prompt.trim() === '')
+      .slice(0, count);
+    
+    if (entriesWithoutPrompts.length === 0) {
+      toast.error('No entries without prompts found');
+      return;
+    }
+
+    const operationKey = `batch-prompts-${Date.now()}`;
+    activityManager.addActivity(
+      'loading', 
+      `Generating prompts for ${entriesWithoutPrompts.length} words...`, 
+      undefined, 
+      operationKey
+    );
+
+    // Update status for all entries being processed
+    entriesWithoutPrompts.forEach(entry => {
+      updateEntry(entry.id, { promptStatus: 'generating' });
+    });
+
+    try {
+      const response = await fetch('/api/generate-prompts-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entries: entriesWithoutPrompts.map(entry => ({
+            id: entry.id,
+            english: entry.original_text,
+            russian: entry.translation_text,
+            transcription: entry.transcription,
+          })),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+
+      const { prompts } = await response.json();
+      
+      // Update all entries with their prompts
+      prompts.forEach((result: { id: number; prompt: string }) => {
+        updateEntry(result.id, {
+          prompt: result.prompt,
+          promptStatus: result.prompt === 'Failed to generate prompt' ? 'error' : 'completed',
+        });
+      });
+
+      const successCount = prompts.filter((p: any) => p.prompt !== 'Failed to generate prompt').length;
+      activityManager.addActivity(
+        'success',
+        `Generated ${successCount} prompts successfully`,
+        undefined,
+        operationKey
+      );
+      toast.success(`Generated ${successCount} prompts`);
+    } catch (error) {
+      // Reset status for all entries
+      entriesWithoutPrompts.forEach(entry => {
+        updateEntry(entry.id, { promptStatus: 'error' });
+      });
+      
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      activityManager.addActivity(
+        'error',
+        'Failed to generate batch prompts',
+        errorMessage,
+        operationKey
+      );
+      toast.error(`Failed to generate prompts: ${errorMessage}`);
+    }
   };
 
   const columns = useMemo<ColumnDef<WordEntry>[]>(
@@ -156,9 +279,51 @@ export default function DataTable() {
         size: 60,
       },
       {
+        id: 'hasImage',
+        header: 'Image',
+        size: 80,
+        cell: ({ row }) => {
+          const entry = row.original;
+          const hasImage = entry.imageUrl && entry.imageStatus === 'completed';
+          
+          return (
+            <div className="flex items-center justify-center">
+              {hasImage ? (
+                <div className="flex items-center gap-1 text-green-600">
+                  <ImageIcon className="h-4 w-4" />
+                  <span className="text-xs">✓</span>
+                </div>
+              ) : (
+                <span className="text-gray-500 text-xs">-</span>
+              )}
+            </div>
+          );
+        },
+      },
+      {
+        id: 'qaScore',
+        header: 'QA',
+        size: 60,
+        cell: ({ row }) => {
+          const entry = row.original;
+          
+          return (
+            <div className="flex items-center justify-center">
+              {entry.qaScore === 'good' ? (
+                <span className="text-green-600 text-sm">✅</span>
+              ) : entry.qaScore === 'bad' ? (
+                <span className="text-red-600 text-sm">❌</span>
+              ) : (
+                <span className="text-gray-500 text-xs">-</span>
+              )}
+            </div>
+          );
+        },
+      },
+      {
         accessorKey: 'prompt',
         header: 'Prompt',
-        size: 500,
+        size: 360,
         cell: ({ row }) => {
           const entry = row.original;
           const isEditing = editingId === entry.id;
@@ -190,13 +355,13 @@ export default function DataTable() {
           }
 
           return (
-            <div className="flex items-center gap-2">
-              <span className="text-sm truncate flex-1 text-gray-300">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-sm truncate block min-w-0 text-gray-300" title={entry.prompt || ''}>
                 {entry.prompt || <span className="text-gray-500">No prompt</span>}
               </span>
               <button
                 onClick={() => handleEditPrompt(entry)}
-                className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-gray-800"
+                className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-gray-800 flex-shrink-0"
               >
                 <Edit2 className="h-3 w-3 text-gray-400" />
               </button>
@@ -284,32 +449,71 @@ export default function DataTable() {
         </div>
         
         <select
-          value={levelFilter || ''}
-          onChange={(e) => setLevelFilter(e.target.value ? Number(e.target.value) : null)}
-          className="input-field w-32"
+          value={promptFilter}
+          onChange={(e) => setPromptFilter(e.target.value as 'all' | 'with' | 'without')}
+          className="input-field w-40"
         >
-          <option value="">All Levels</option>
-          {levels.map(level => (
-            <option key={level} value={level}>Level {level}</option>
-          ))}
+          <option value="all">All Prompts</option>
+          <option value="with">With Prompts</option>
+          <option value="without">Without Prompts</option>
         </select>
 
         <select
-          value={itemsPerPage}
-          onChange={(e) => setItemsPerPage(Number(e.target.value))}
-          className="input-field w-32"
+          value={imageFilter}
+          onChange={(e) => setImageFilter(e.target.value as 'all' | 'with' | 'without' | 'bad')}
+          className="input-field w-40"
         >
-          <option value={20}>20</option>
-          <option value={50}>50</option>
-          <option value={100}>100</option>
-          <option value={200}>200</option>
-          <option value={500}>500</option>
+          <option value="all">All Images</option>
+          <option value="with">With Images</option>
+          <option value="without">Without Images</option>
+          <option value="bad">❌ Bad Images</option>
         </select>
+
+        {/* Batch Generate Button */}
+        <div className="relative" ref={batchMenuRef}>
+          <button
+            onClick={() => setShowBatchMenu(!showBatchMenu)}
+            className="btn-primary flex items-center gap-2"
+          >
+            <Sparkles className="h-4 w-4" />
+            Batch Generate
+          </button>
+          
+          {showBatchMenu && (
+            <div className="absolute right-0 mt-2 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
+              <div className="p-2">
+                <div className="text-xs text-gray-400 mb-2">Generate prompts for:</div>
+                {[10, 25, 50, 100, 200].map(count => (
+                  <button
+                    key={count}
+                    onClick={() => {
+                      handleBatchGeneratePrompts(count);
+                      setShowBatchMenu(false);
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
+                  >
+                    First {count} words
+                  </button>
+                ))}
+                <button
+                  onClick={() => {
+                    const allWithoutPrompts = filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length;
+                    handleBatchGeneratePrompts(allWithoutPrompts);
+                    setShowBatchMenu(false);
+                  }}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-2 pt-2"
+                >
+                  All without prompts ({filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length})
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Table */}
       <div className="overflow-x-auto rounded-lg border border-gray-700">
-        <table className="w-full">
+        <table className="w-full table-fixed">
           <thead>
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id} className="table-header">
@@ -339,7 +543,7 @@ export default function DataTable() {
             {table.getRowModel().rows.map((row) => (
               <tr key={row.id} className="table-row group">
                 {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="px-4 py-3 text-sm">
+                  <td key={cell.id} className="px-4 py-3 text-sm" style={{ maxWidth: cell.column.getSize() }}>
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
                 ))}

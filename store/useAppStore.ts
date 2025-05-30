@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import { WordEntry, AppState } from '@/types';
 
 interface AppStore extends AppState {
@@ -14,6 +13,9 @@ interface AppStore extends AppState {
   setActiveTab: (tab: 'table' | 'gallery') => void;
   getFilteredEntries: () => WordEntry[];
   clearData: () => void;
+  syncWithDatabase: () => Promise<void>;
+  loadFromDatabase: () => Promise<void>;
+  isInitialized: boolean;
 }
 
 const initialState: AppState = {
@@ -27,18 +29,43 @@ const initialState: AppState = {
   activeTab: 'table',
 };
 
-export const useAppStore = create<AppStore>()(
-  persist(
-    (set, get) => ({
+export const useAppStore = create<AppStore>()((set, get) => ({
       ...initialState,
+      isInitialized: false,
       
-      setEntries: (entries) => set({ entries, currentPage: 1 }),
+      setEntries: async (entries) => {
+        set({ entries, currentPage: 1 });
+        
+        // Sync to database in background
+        try {
+          await fetch('/api/language-cards', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(entries),
+          });
+        } catch (error) {
+          console.error('Failed to sync entries to database:', error);
+        }
+      },
       
-      updateEntry: (id, updates) => set((state) => ({
-        entries: state.entries.map((entry) =>
-          entry.id === id ? { ...entry, ...updates } : entry
-        ),
-      })),
+      updateEntry: async (id, updates) => {
+        set((state) => ({
+          entries: state.entries.map((entry) =>
+            entry.id === id ? { ...entry, ...updates } : entry
+          ),
+        }));
+        
+        // Update in database
+        try {
+          await fetch('/api/language-cards', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, updates }),
+          });
+        } catch (error) {
+          console.error('Failed to update entry in database:', error);
+        }
+      },
       
       setCurrentPage: (currentPage) => set({ currentPage }),
       setItemsPerPage: (itemsPerPage) => set({ itemsPerPage, currentPage: 1 }),
@@ -89,13 +116,47 @@ export const useAppStore = create<AppStore>()(
         return filtered;
       },
       
-      clearData: () => set(initialState),
-    }),
-    {
-      name: 'language-card-storage',
-      partialize: (state) => ({
-        entries: state.entries,
-      }),
-    }
-  )
-);
+      clearData: async () => {
+        set(initialState);
+        // Note: We don't clear the database here to preserve data
+      },
+      
+      syncWithDatabase: async () => {
+        const state = get();
+        if (state.entries.length > 0) {
+          try {
+            await fetch('/api/language-cards', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(state.entries),
+            });
+          } catch (error) {
+            console.error('Failed to sync with database:', error);
+          }
+        }
+      },
+      
+      loadFromDatabase: async () => {
+        try {
+          const response = await fetch('/api/language-cards');
+          if (response.ok) {
+            const entries = await response.json();
+            if (entries.length > 0) {
+              set({ entries, isInitialized: true });
+            } else {
+              set({ isInitialized: true });
+            }
+          } else {
+            set({ isInitialized: true });
+          }
+        } catch (error) {
+          console.error('Failed to load from database:', error);
+          set({ isInitialized: true });
+        }
+      },
+    }));
+
+// Initialize database on first load
+if (typeof window !== 'undefined') {
+  useAppStore.getState().loadFromDatabase();
+}

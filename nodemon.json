@@ -1,0 +1,18 @@
+{
+  "watch": [
+    "app",
+    "components",
+    "lib",
+    "store",
+    "types"
+  ],
+  "ext": "ts,tsx,js,jsx,json",
+  "ignore": [
+    ".next/*",
+    "node_modules/*",
+    "public/images/*",
+    ".git/*"
+  ],
+  "exec": "next dev",
+  "delay": "500"
+}

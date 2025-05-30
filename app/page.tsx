@@ -6,6 +6,7 @@ import FileUpload from '@/components/FileUpload';
 import DataTable from '@/components/DataTable';
 import Gallery from '@/components/Gallery';
 import ASCIILogo from '@/components/ASCIILogo';
+import QueueStatus from '@/components/QueueStatus';
 import { FileText, Image } from 'lucide-react';
 
 export default function Home() {
@@ -57,6 +58,9 @@ export default function Home() {
           </>
         )}
       </main>
+      
+      {/* Queue Status - shows when there are items in queue */}
+      <QueueStatus />
     </div>
   );
 }
