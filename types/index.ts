@@ -1,3 +1,12 @@
+export interface CategorizationResult {
+  primary_category: 'CONCRETE-VISUAL' | 'ABSTRACT-SYMBOLIC' | 'ACTION-VISUAL' | 'STATE-METAPHORICAL';
+  image_suitability: 'HIGH' | 'MEDIUM' | 'LOW';
+  word_type: 'noun' | 'verb' | 'adjective' | 'adverb' | 'phrase';
+  transformation_needed: boolean;
+  transformation_suggestion: string;
+  confidence: number;
+}
+
 export interface WordEntry {
   id: number;
   original_text: string;
@@ -11,6 +20,8 @@ export interface WordEntry {
   replicateId?: string;
   qaScore?: 'good' | 'bad' | null;
   imageGeneratedAt?: string; // ISO timestamp when image was generated
+  categorization?: CategorizationResult;
+  categorizationStatus?: 'none' | 'processing' | 'completed' | 'error';
 }
 
 export interface AppState {

@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { Kysely, SqliteDialect } from 'kysely';
 import { Database as DatabaseType, DB } from './schema';
 import { createTables } from './migrations';
+import { runMigrations } from './runMigrations';
 import path from 'path';
 
 let db: DB | null = null;
@@ -21,6 +22,9 @@ export function getDatabase(): DB {
     
     // Initialize tables if they don't exist
     createTables(db);
+    
+    // Run migrations
+    runMigrations();
   }
   
   return db;

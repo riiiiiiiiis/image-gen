@@ -20,6 +20,7 @@ export class LanguageCardRepository {
         image_url: entry.imageUrl || null,
         image_status: 'none',
         prompt_status: 'none',
+        categorization_status: 'none',
         replicate_id: entry.replicateId || null,
         qa_score: entry.qaScore || null,
         image_generated_at: entry.imageGeneratedAt || null,
@@ -48,6 +49,18 @@ export class LanguageCardRepository {
     if (updates.replicateId !== undefined) dbUpdates.replicate_id = updates.replicateId || null;
     if (updates.qaScore !== undefined) dbUpdates.qa_score = updates.qaScore || null;
     if (updates.imageGeneratedAt !== undefined) dbUpdates.image_generated_at = updates.imageGeneratedAt || null;
+    
+    // Handle categorization updates
+    if (updates.categorization !== undefined) {
+      const cat = updates.categorization;
+      dbUpdates.categorization_primary_category = cat.primary_category;
+      dbUpdates.categorization_image_suitability = cat.image_suitability;
+      dbUpdates.categorization_word_type = cat.word_type;
+      dbUpdates.categorization_transformation_needed = cat.transformation_needed ? 1 : 0;
+      dbUpdates.categorization_transformation_suggestion = cat.transformation_suggestion;
+      dbUpdates.categorization_confidence = cat.confidence;
+    }
+    if (updates.categorizationStatus !== undefined) dbUpdates.categorization_status = updates.categorizationStatus;
 
     const result = await this.db
       .updateTable('word_entries')
@@ -124,6 +137,7 @@ export class LanguageCardRepository {
               image_url: entry.imageUrl || null,
               image_status: entry.imageStatus,
               prompt_status: entry.promptStatus,
+              categorization_status: entry.categorizationStatus || 'none',
               replicate_id: entry.replicateId || null,
               qa_score: entry.qaScore || null,
               image_generated_at: entry.imageGeneratedAt || null,
@@ -145,6 +159,7 @@ export class LanguageCardRepository {
               image_url: entry.imageUrl || null,
               image_status: entry.imageStatus,
               prompt_status: entry.promptStatus,
+              categorization_status: entry.categorizationStatus || 'none',
               replicate_id: entry.replicateId || null,
               qa_score: entry.qaScore || null,
               image_generated_at: entry.imageGeneratedAt || null,
@@ -163,7 +178,7 @@ export class LanguageCardRepository {
   }
 
   private mapToWordEntry(row: WordEntryTable): WordEntry {
-    return {
+    const entry: WordEntry = {
       id: row.id,
       original_text: row.original_text,
       translation_text: row.translation_text,
@@ -177,6 +192,22 @@ export class LanguageCardRepository {
       qaScore: row.qa_score,
       imageGeneratedAt: row.image_generated_at || undefined,
     };
+    
+    // Map categorization if present
+    if (row.categorization_primary_category) {
+      entry.categorization = {
+        primary_category: row.categorization_primary_category,
+        image_suitability: row.categorization_image_suitability!,
+        word_type: row.categorization_word_type!,
+        transformation_needed: row.categorization_transformation_needed === 1,
+        transformation_suggestion: row.categorization_transformation_suggestion || '',
+        confidence: row.categorization_confidence || 0,
+      };
+    }
+    
+    entry.categorizationStatus = row.categorization_status || 'none';
+    
+    return entry;
   }
 }
 

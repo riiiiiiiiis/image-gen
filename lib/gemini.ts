@@ -59,7 +59,10 @@ Word pairs:
 Return valid JSON only, no markdown formatting.`;
 
 export function getGeminiModel() {
-  return genAI.getGenerativeModel({ model: GEMINI_MODEL });
+  return genAI.getGenerativeModel({ 
+    model: GEMINI_MODEL,
+    systemInstruction: 'Output only valid JSON. No explanations.'
+  });
 }
 
 export function formatSinglePrompt(english: string, russian: string, transcription: string): string {

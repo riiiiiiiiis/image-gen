@@ -35,9 +35,11 @@ export default function DataTable() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<string>('');
   const [showBatchMenu, setShowBatchMenu] = useState(false);
+  const [showCategorizationMenu, setShowCategorizationMenu] = useState(false);
   const [imageFilter, setImageFilter] = useState<'all' | 'with' | 'without' | 'bad'>('all');
   const [promptFilter, setPromptFilter] = useState<'all' | 'with' | 'without'>('all');
   const batchMenuRef = useRef<HTMLDivElement>(null);
+  const categorizationMenuRef = useRef<HTMLDivElement>(null);
 
   const filteredData = useMemo(() => {
     let data = getFilteredEntries();
@@ -61,22 +63,25 @@ export default function DataTable() {
     return data;
   }, [getFilteredEntries, entries, imageFilter, promptFilter]);
 
-  // Click outside handler for batch menu
+  // Click outside handler for menus
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (batchMenuRef.current && !batchMenuRef.current.contains(event.target as Node)) {
         setShowBatchMenu(false);
       }
+      if (categorizationMenuRef.current && !categorizationMenuRef.current.contains(event.target as Node)) {
+        setShowCategorizationMenu(false);
+      }
     };
 
-    if (showBatchMenu) {
+    if (showBatchMenu || showCategorizationMenu) {
       document.addEventListener('mousedown', handleClickOutside);
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showBatchMenu]);
+  }, [showBatchMenu, showCategorizationMenu]);
 
   const handleGeneratePrompt = async (entry: WordEntry) => {
     const operationKey = `prompt-${entry.id}`;
@@ -251,6 +256,91 @@ export default function DataTable() {
     }
   };
 
+  const handleBatchCategorize = async (count: number) => {
+    // Get entries without categorization
+    const entriesWithoutCategorization = filteredData
+      .filter(entry => !entry.categorization || entry.categorizationStatus !== 'completed')
+      .slice(0, count);
+    
+    console.log('Entries selected for categorization:', entriesWithoutCategorization);
+    
+    if (entriesWithoutCategorization.length === 0) {
+      toast.error('No entries without categorization found');
+      return;
+    }
+
+    const operationKey = `batch-categorize-${Date.now()}`;
+    activityManager.addActivity(
+      'loading', 
+      `Categorizing ${entriesWithoutCategorization.length} words...`, 
+      undefined, 
+      operationKey
+    );
+
+    // Process in batches of 10 (API limit)
+    const batchSize = 10;
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (let i = 0; i < entriesWithoutCategorization.length; i += batchSize) {
+      const batch = entriesWithoutCategorization.slice(i, i + batchSize);
+      
+      try {
+        const response = await fetch('/api/categorize-vocabulary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            entries: batch.map(entry => ({
+              id: entry.id,
+              original_text: entry.original_text,
+              translation_text: entry.translation_text,
+              level_id: entry.level_id,
+            })),
+          }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+
+        const responseData = await response.json();
+        console.log('Categorization response:', responseData);
+        const { results, errors } = responseData;
+        
+        // Update successful categorizations
+        results.forEach((result: any) => {
+          const entry = batch.find(e => e.id === result.id);
+          if (entry) {
+            updateEntry(result.id, { 
+              categorization: result.categorization,
+              categorizationStatus: 'completed' 
+            });
+            successCount++;
+          }
+        });
+        
+        errorCount += errors.length;
+      } catch (error) {
+        // Mark batch as error
+        batch.forEach(entry => {
+          updateEntry(entry.id, { categorizationStatus: 'error' });
+        });
+        errorCount += batch.length;
+        console.error('Batch categorization error:', error);
+      }
+    }
+
+    activityManager.addActivity(
+      successCount > 0 ? 'success' : 'error',
+      `Categorization complete`,
+      `${successCount} succeeded, ${errorCount} failed`,
+      operationKey
+    );
+    
+    toast.success(`Categorized ${successCount} words`);
+  };
+
   const columns = useMemo<ColumnDef<WordEntry>[]>(
     () => [
       {
@@ -277,6 +367,42 @@ export default function DataTable() {
         accessorKey: 'level_id',
         header: 'Level',
         size: 60,
+      },
+      {
+        id: 'category',
+        header: 'Category',
+        size: 140,
+        cell: ({ row }) => {
+          const entry = row.original;
+          if (!entry.categorization || entry.categorizationStatus !== 'completed') {
+            return <span className="text-gray-500 text-xs">-</span>;
+          }
+          
+          const categoryMap = {
+            'CONCRETE-VISUAL': { label: 'Concrete', color: 'text-green-500' },
+            'ABSTRACT-SYMBOLIC': { label: 'Abstract', color: 'text-blue-500' },
+            'ACTION-VISUAL': { label: 'Action', color: 'text-orange-500' },
+            'STATE-METAPHORICAL': { label: 'State', color: 'text-purple-500' }
+          };
+          
+          const category = categoryMap[entry.categorization.primary_category];
+          const suitability = entry.categorization.image_suitability;
+          
+          return (
+            <div className="flex flex-col gap-1">
+              <span className={`text-xs font-medium ${category.color}`}>
+                {category.label}
+              </span>
+              <span className={`text-xs ${
+                suitability === 'HIGH' ? 'text-green-400' : 
+                suitability === 'MEDIUM' ? 'text-yellow-400' : 
+                'text-red-400'
+              }`}>
+                {suitability}
+              </span>
+            </div>
+          );
+        },
       },
       {
         id: 'hasImage',
@@ -323,7 +449,7 @@ export default function DataTable() {
       {
         accessorKey: 'prompt',
         header: 'Prompt',
-        size: 360,
+        size: 280,
         cell: ({ row }) => {
           const entry = row.original;
           const isEditing = editingId === entry.id;
@@ -504,6 +630,47 @@ export default function DataTable() {
                   className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-2 pt-2"
                 >
                   All without prompts ({filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length})
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Categorization Button */}
+        <div className="relative" ref={categorizationMenuRef}>
+          <button
+            onClick={() => setShowCategorizationMenu(!showCategorizationMenu)}
+            className="btn-primary flex items-center gap-2"
+          >
+            <Filter className="h-4 w-4" />
+            Categorize (TIAC)
+          </button>
+          
+          {showCategorizationMenu && (
+            <div className="absolute right-0 mt-2 w-56 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
+              <div className="p-2">
+                <div className="text-xs text-gray-400 mb-2">Categorize vocabulary for:</div>
+                {[2, 10, 25, 50, 100].map(count => (
+                  <button
+                    key={count}
+                    onClick={() => {
+                      handleBatchCategorize(count);
+                      setShowCategorizationMenu(false);
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
+                  >
+                    First {count} words
+                  </button>
+                ))}
+                <button
+                  onClick={() => {
+                    const allWithoutCategorization = filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length;
+                    handleBatchCategorize(allWithoutCategorization);
+                    setShowCategorizationMenu(false);
+                  }}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-2 pt-2"
+                >
+                  All uncategorized ({filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length})
                 </button>
               </div>
             </div>
