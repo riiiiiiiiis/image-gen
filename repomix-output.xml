@@ -1,0 +1,5072 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.claude/
+  settings.local.json
+app/
+  api/
+    categorize-vocabulary/
+      route.ts
+    gallery/
+      route.ts
+    generate-image/
+      route.ts
+    generate-prompt/
+      route.ts
+    generate-prompts-batch/
+      route.ts
+    language-cards/
+      route.ts
+    queue-image/
+      route.ts
+    test-categorization/
+      route.ts
+    test-gemini/
+      route.ts
+  globals.css
+  layout.tsx
+  page.tsx
+  theme.css
+components/
+  ActivityLog.tsx
+  ASCIILogo.tsx
+  DataTable.tsx
+  DemoButton.tsx
+  FileUpload.tsx
+  Gallery.tsx
+  QueueStatus.tsx
+data/
+  gallery.json
+lib/
+  db/
+    migrations/
+      002_add_categorization.ts
+    database.ts
+    migrations.ts
+    repository.ts
+    runMigrations.ts
+    schema.ts
+  apiClient.ts
+  batchUtils.ts
+  gemini.ts
+  imageQueue.ts
+  openrouter.ts
+  replicateConfig.ts
+public/
+  file.svg
+  globe.svg
+  next.svg
+  vercel.svg
+  window.svg
+store/
+  useAppStore.ts
+types/
+  index.ts
+utils/
+  migrate-to-sqlite.ts
+.eslintrc.json
+.gitignore
+CLAUDE.md
+next.config.ts
+nodemon.json
+package.json
+postcss.config.mjs
+README.md
+tsconfig.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".claude/settings.local.json">
+{
+  "permissions": {
+    "allow": [
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+      "Bash(git add:*)",
+      "Bash(mkdir:*)",
+      "Bash(npm run build:*)",
+      "Bash(ls:*)"
+    ],
+    "deny": []
+  },
+  "enableAllProjectMcpServers": false
+}
+</file>
+
+<file path="lib/openrouter.ts">
+export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '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';
+export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-preview-05-20';
+
+interface OpenRouterMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+interface OpenRouterRequest {
+  model: string;
+  messages: OpenRouterMessage[];
+  temperature?: number;
+  max_tokens?: number;
+  response_format?: { type: 'json_object' };
+}
+
+export async function callOpenRouter(
+  messages: OpenRouterMessage[],
+  options: Partial<OpenRouterRequest> = {}
+): Promise<any> {
+  const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://github.com/sdxl-emoji-pipeline',
+      'X-Title': 'SDXL Emoji Pipeline'
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      messages,
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      ...options
+    })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      errorData.error?.message || 
+      `OpenRouter API error: ${response.status} ${response.statusText}`
+    );
+  }
+
+  const data = await response.json();
+  return data.choices[0].message.content;
+}
+
+export function handleOpenRouterError(error: any) {
+  console.error('OpenRouter API Error:', error);
+  
+  if (error.message?.includes('Invalid API key') || error.message?.includes('Unauthorized')) {
+    return {
+      message: 'Invalid API key. Please check your OPENROUTER_API_KEY.',
+      status: 401
+    };
+  }
+  
+  if (error.message?.includes('Rate limit')) {
+    return {
+      message: 'Rate limit exceeded. Please try again later.',
+      status: 429
+    };
+  }
+  
+  if (error.message?.includes('Model not found')) {
+    return {
+      message: 'Model not available. Please check the model name.',
+      status: 404
+    };
+  }
+  
+  return {
+    message: error.message || 'Failed to call OpenRouter API',
+    status: 500
+  };
+}
+</file>
+
+<file path="app/api/categorize-vocabulary/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { callOpenRouter, handleOpenRouterError } from '@/lib/openrouter';
+import { languageCardRepository } from '@/lib/db/repository';
+import { CategorizationResult } from '@/types';
+
+export const maxDuration = 60; // 60 seconds timeout
+
+interface CategorizeRequest {
+  entries: Array<{
+    id: number;
+    original_text: string;
+    translation_text: string;
+    level_id: number;
+  }>;
+}
+
+interface CategorizeResponse {
+  results: Array<{
+    id: number;
+    categorization: CategorizationResult;
+  }>;
+  errors: Array<{
+    id: number;
+    error: string;
+  }>;
+}
+
+function createCategorizationPrompt(entry: CategorizeRequest['entries'][0]): string {
+  return `Categorize the following vocabulary word for image generation suitability.
+Word: ${entry.original_text}
+Translation: ${entry.translation_text}
+Context: English language learning, level ${entry.level_id}
+
+Analyze and categorize based on:
+- Concrete/Abstract nature
+- Visual representation potential (HIGH/MEDIUM/LOW)
+- Word type (noun/verb/adjective/adverb/phrase)
+- For polysemous words, identify primary meaning
+- Suggest transformation strategy if abstract
+
+Output JSON only, matching this exact structure with valid values:
+{
+  "primary_category": "CONCRETE-VISUAL" | "ABSTRACT-SYMBOLIC" | "ACTION-VISUAL" | "STATE-METAPHORICAL",
+  "image_suitability": "HIGH" | "MEDIUM" | "LOW",
+  "word_type": "noun" | "verb" | "adjective" | "adverb" | "phrase",
+  "transformation_needed": boolean, // e.g., true or false
+  "transformation_suggestion": "string", // e.g., "represent 'happiness' with a smiling emoji face" or "" if not needed
+  "confidence": number // 0.0-1.0
+}
+
+Example of a valid JSON output:
+{
+  "primary_category": "ABSTRACT-SYMBOLIC",
+  "image_suitability": "MEDIUM",
+  "word_type": "noun",
+  "transformation_needed": true,
+  "transformation_suggestion": "Visualize as an idea lightbulb",
+  "confidence": 0.85
+}`;
+}
+
+async function categorizeEntry(entry: CategorizeRequest['entries'][0]): Promise<CategorizationResult> {
+  const prompt = createCategorizationPrompt(entry);
+  
+  try {
+    console.log(`Sending categorization request for "${entry.original_text}"`);
+    console.log('Using OpenRouter with model:', process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-preview-05-20');
+    
+    const response = await callOpenRouter([
+      {
+        role: 'system',
+        content: 'You are a helpful assistant that categorizes vocabulary words for image generation suitability. Output only valid JSON. No explanations.'
+      },
+      {
+        role: 'user',
+        content: prompt
+      }
+    ], {
+      temperature: 0.1,
+      max_tokens: 8192,
+      response_format: { type: 'json_object' }
+    });
+    
+    console.log(`OpenRouter response for "${entry.original_text}":`, response);
+    
+    // Parse the response
+    let jsonText = response.trim();
+    
+    // Remove markdown code blocks if present
+    if (jsonText.includes('```json')) {
+      jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    } else if (jsonText.includes('```')) {
+      jsonText = jsonText.replace(/```\s*/g, '').trim();
+    }
+    
+    // Extract JSON object if there's extra text
+    const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+    jsonText = jsonMatch ? jsonMatch[0] : jsonText;
+    
+    console.log(`[Categorization] Attempting to parse JSON for entry ID ${entry.id}:`, jsonText);
+    let categorization: CategorizationResult;
+    try {
+      categorization = JSON.parse(jsonText) as CategorizationResult;
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError);
+      console.error('Failed to parse text:', jsonText);
+      console.error('Original response text:', response);
+      throw new Error(`JSON parse error: ${parseError instanceof Error ? parseError.message : 'Unknown parse error'}`);
+    }
+    console.log(`[Categorization] Successfully parsed categorization for entry ID ${entry.id}:`, categorization);
+    
+    // Validate the response structure
+    if (!categorization.primary_category || !categorization.image_suitability || !categorization.word_type) {
+      throw new Error('Invalid categorization response structure');
+    }
+    
+    // Ensure boolean type for transformation_needed
+    categorization.transformation_needed = Boolean(categorization.transformation_needed);
+    
+    // Ensure string type for transformation_suggestion
+    categorization.transformation_suggestion = categorization.transformation_suggestion || '';
+    
+    // Ensure confidence is a number between 0 and 1
+    categorization.confidence = Math.max(0, Math.min(1, Number(categorization.confidence) || 0.5));
+    
+    return categorization;
+  } catch (error) {
+    console.error(`[Categorization] Failed to categorize entry ID: ${entry.id}, Word: "${entry.original_text}". Error:`, error);
+    
+    // Use the OpenRouter error handler for better error messages
+    const errorInfo = handleOpenRouterError(error);
+    console.error('Handled error info:', errorInfo);
+    throw new Error(errorInfo.message);
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json() as CategorizeRequest;
+    
+    // Validate request
+    if (!body.entries || !Array.isArray(body.entries)) {
+      return NextResponse.json({ error: 'Invalid request: entries must be an array' }, { status: 400 });
+    }
+    
+    if (body.entries.length === 0) {
+      return NextResponse.json({ error: 'Invalid request: entries array is empty' }, { status: 400 });
+    }
+    
+    if (body.entries.length > 10) {
+      return NextResponse.json({ error: 'Invalid request: maximum 10 entries allowed per batch' }, { status: 400 });
+    }
+    
+    const response: CategorizeResponse = {
+      results: [],
+      errors: [],
+    };
+    
+    // Process entries in parallel
+    const promises = body.entries.map(async (entry) => {
+      try {
+        // Update status to processing
+        await languageCardRepository.update(entry.id, {
+          categorizationStatus: 'processing',
+        });
+        
+        // Categorize the entry
+        const categorization = await categorizeEntry(entry);
+        console.log(`Successfully categorized entry ${entry.id}:`, categorization);
+        
+        // Save categorization to database
+        await languageCardRepository.update(entry.id, {
+          categorization,
+          categorizationStatus: 'completed',
+        });
+        
+        response.results.push({
+          id: entry.id,
+          categorization,
+        });
+        console.log(`Added to results array. Current results length: ${response.results.length}`);
+      } catch (error) {
+        console.error(`=== ENTRY ${entry.id} ERROR ===`);
+        console.error(`Failed to categorize entry ${entry.id}:`, error);
+        console.error(`Entry details:`, {
+          id: entry.id,
+          original_text: entry.original_text,
+          translation_text: entry.translation_text,
+          level_id: entry.level_id
+        });
+        console.error('Error details:', {
+          message: error instanceof Error ? error.message : String(error),
+          name: error instanceof Error ? error.name : 'Unknown',
+          stack: error instanceof Error ? error.stack : 'No stack',
+        });
+        console.error(`=== END ENTRY ${entry.id} ERROR ===`);
+        
+        // Update status to error
+        await languageCardRepository.update(entry.id, {
+          categorizationStatus: 'error',
+        });
+        
+        response.errors.push({
+          id: entry.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    });
+    
+    await Promise.all(promises);
+    
+    console.log('Final response being sent:', {
+      resultsCount: response.results.length,
+      errorsCount: response.errors.length,
+      results: response.results,
+      errors: response.errors
+    });
+    
+    return NextResponse.json(response);
+  } catch (error) {
+    console.error('=== CATEGORIZATION API ERROR ===');
+    console.error('Categorization API error:', error);
+    console.error('API Error details:', {
+      message: error instanceof Error ? error.message : String(error),
+      name: error instanceof Error ? error.name : 'Unknown',
+      stack: error instanceof Error ? error.stack : 'No stack',
+    });
+    console.error('=== END CATEGORIZATION API ERROR ===');
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to categorize vocabulary' },
+      { status: 500 }
+    );
+  }
+}
+</file>
+
+<file path="app/api/gallery/route.ts">
+import { NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
+
+const GALLERY_PATH = path.join(process.cwd(), 'data', 'gallery.json');
+const IMAGES_DIR = path.join(process.cwd(), 'public', 'images');
+
+export async function GET() {
+  try {
+    // Read gallery JSON
+    let galleryData;
+    if (fs.existsSync(GALLERY_PATH)) {
+      const fileContent = fs.readFileSync(GALLERY_PATH, 'utf8');
+      galleryData = JSON.parse(fileContent);
+    } else {
+      // Auto-generate from existing images
+      galleryData = await generateGalleryFromImages();
+    }
+
+    return NextResponse.json(galleryData);
+  } catch (error) {
+    console.error('Error reading gallery:', error);
+    return NextResponse.json({ error: 'Failed to load gallery' }, { status: 500 });
+  }
+}
+
+async function generateGalleryFromImages() {
+  const imageFiles = fs.readdirSync(IMAGES_DIR)
+    .filter(file => /\.(png|jpg|jpeg|webp)$/i.test(file))
+    .map(filename => {
+      const nameWithoutExt = path.parse(filename).name;
+      // Only include files with numeric IDs
+      if (isNaN(Number(nameWithoutExt))) {
+        return null;
+      }
+      return {
+        id: Number(nameWithoutExt),
+        filename,
+        path: `/images/${nameWithoutExt}.png`,
+        word: null,
+        translation: null,
+        prompt: null,
+        created_at: new Date().toISOString()
+      };
+    })
+    .filter(Boolean); // Remove null entries
+
+  const galleryData = {
+    images: imageFiles,
+    metadata: {
+      total_count: imageFiles.length,
+      last_updated: new Date().toISOString(),
+      version: "1.0"
+    }
+  };
+
+  // Save generated data
+  fs.writeFileSync(GALLERY_PATH, JSON.stringify(galleryData, null, 2));
+  return galleryData;
+}
+</file>
+
+<file path="app/api/generate-prompts-batch/route.ts">
+import { NextResponse } from 'next/server';
+import { getGeminiModel, formatBatchPrompt, handleGeminiError } from '@/lib/gemini';
+
+export async function POST(request: Request) {
+  try {
+    const { entries } = await request.json();
+
+    if (!entries || !Array.isArray(entries) || entries.length === 0) {
+      return NextResponse.json(
+        { error: 'Missing or invalid entries array' },
+        { status: 400 }
+      );
+    }
+
+    const model = getGeminiModel();
+    const batchPrompt = formatBatchPrompt(entries);
+
+    const result = await model.generateContent(batchPrompt);
+    const response = await result.response;
+    const text = response.text();
+
+    console.log('Raw Gemini response:', text);
+
+    // Parse the response
+    let prompts;
+    try {
+      // Remove any markdown code blocks if present
+      const cleanedText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      prompts = JSON.parse(cleanedText);
+    } catch (parseError) {
+      console.error('Failed to parse Gemini response:', parseError);
+      console.error('Response text:', text);
+      return NextResponse.json(
+        { error: 'Failed to parse AI response' },
+        { status: 500 }
+      );
+    }
+
+    // Validate the response structure
+    if (!Array.isArray(prompts)) {
+      return NextResponse.json(
+        { error: 'Invalid response format from AI' },
+        { status: 500 }
+      );
+    }
+
+    // Create a map for easy lookup
+    const promptMap = new Map(prompts.map(p => [p.id, p.prompt]));
+    
+    // Build the response ensuring all requested entries have a prompt
+    const results = entries.map(entry => ({
+      id: entry.id,
+      prompt: promptMap.get(entry.id) || 'Failed to generate prompt'
+    }));
+
+    return NextResponse.json({ prompts: results });
+  } catch (error: any) {
+    const errorInfo = handleGeminiError(error);
+    return NextResponse.json(
+      { error: errorInfo.message },
+      { status: errorInfo.status }
+    );
+  }
+}
+</file>
+
+<file path="app/api/language-cards/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { languageCardRepository } from '@/lib/db/repository';
+import { WordEntry } from '@/types';
+
+export async function GET() {
+  try {
+    const entries = await languageCardRepository.findAll();
+    return NextResponse.json(entries);
+  } catch (error) {
+    console.error('Error fetching language cards:', error);
+    return NextResponse.json({ error: 'Failed to fetch language cards' }, { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const entries: WordEntry[] = await request.json();
+    await languageCardRepository.bulkUpsert(entries);
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Error saving language cards:', error);
+    return NextResponse.json({ error: 'Failed to save language cards' }, { status: 500 });
+  }
+}
+
+export async function PATCH(request: NextRequest) {
+  try {
+    const { id, updates } = await request.json();
+    await languageCardRepository.update(id, updates);
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Error updating language card:', error);
+    return NextResponse.json({ error: 'Failed to update language card' }, { status: 500 });
+  }
+}
+</file>
+
+<file path="app/api/queue-image/route.ts">
+import { NextResponse } from 'next/server';
+import { imageQueue } from '@/lib/imageQueue';
+
+// In-memory storage for completion callbacks
+const completionCallbacks = new Map<string, (result: any) => void>();
+const errorCallbacks = new Map<string, (error: string) => void>();
+
+// Override queue methods to handle notifications
+class ExtendedImageQueue extends (imageQueue.constructor as any) {
+  protected notifyCompletion(item: any, result: any) {
+    const callback = completionCallbacks.get(item.id);
+    if (callback) {
+      callback(result);
+      completionCallbacks.delete(item.id);
+    }
+  }
+
+  protected notifyError(item: any, error: string) {
+    const errorCallback = errorCallbacks.get(item.id);
+    if (errorCallback) {
+      errorCallback(error);
+      errorCallbacks.delete(item.id);
+    }
+  }
+}
+
+// Replace the queue instance methods
+Object.setPrototypeOf(imageQueue, ExtendedImageQueue.prototype);
+
+export async function POST(request: Request) {
+  try {
+    const { action, ...data } = await request.json();
+
+    switch (action) {
+      case 'add':
+        return handleAddToQueue(data);
+      case 'status':
+        return handleGetStatus();
+      case 'items':
+        return handleGetItems();
+      default:
+        return NextResponse.json(
+          { error: 'Invalid action' },
+          { status: 400 }
+        );
+    }
+  } catch (error: any) {
+    console.error('Queue API error:', error);
+    return NextResponse.json(
+      { error: error.message || 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+
+async function handleAddToQueue(data: any) {
+  const { entryId, englishWord, prompt } = data;
+
+  console.log(`API: Adding to queue - entryId: ${entryId}, word: ${englishWord}`);
+
+  if (!entryId || !englishWord || !prompt) {
+    console.log('API: Missing required fields:', { entryId, englishWord, prompt: !!prompt });
+    return NextResponse.json(
+      { error: 'Missing required fields: entryId, englishWord, prompt' },
+      { status: 400 }
+    );
+  }
+
+  try {
+    // Add to queue
+    console.log(`API: Adding to imageQueue...`);
+    const queueId = await imageQueue.addToQueue(entryId, englishWord, prompt);
+    console.log(`API: Added to queue with ID: ${queueId}`);
+
+    // Create a promise that resolves when the image is generated
+    const resultPromise = new Promise<any>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        completionCallbacks.delete(queueId);
+        errorCallbacks.delete(queueId);
+        reject(new Error('Generation timeout'));
+      }, 300000); // 5 minute timeout
+
+      completionCallbacks.set(queueId, (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      });
+
+      errorCallbacks.set(queueId, (error) => {
+        clearTimeout(timeout);
+        reject(new Error(error));
+      });
+    });
+
+    // Wait for completion
+    const result = await resultPromise;
+
+    return NextResponse.json({
+      queueId,
+      status: 'completed',
+      ...result,
+    });
+
+  } catch (error: any) {
+    console.error('Error adding to queue:', error);
+    return NextResponse.json(
+      { error: error.message || 'Failed to generate image' },
+      { status: 500 }
+    );
+  }
+}
+
+async function handleGetStatus() {
+  const status = imageQueue.getQueueStatus();
+  return NextResponse.json(status);
+}
+
+async function handleGetItems() {
+  const items = imageQueue.getQueueItems();
+  return NextResponse.json({ items });
+}
+</file>
+
+<file path="app/api/test-categorization/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { getGeminiModel } from '@/lib/gemini';
+
+export async function GET() {
+  try {
+    const testWords = [
+      { id: 1, original_text: 'a, an', translation_text: 'неопределенный артикль', level_id: 66 },
+      { id: 2, original_text: 'about', translation_text: 'о, около, приблизительно, почти', level_id: 66 }
+    ];
+    
+    const model = getGeminiModel();
+    const results = [];
+    
+    for (const word of testWords) {
+      const prompt = `Categorize "${word.original_text}" (${word.translation_text}) for emoji image generation.
+
+Return JSON:
+{
+  "primary_category": "CONCRETE-VISUAL" or "ABSTRACT-SYMBOLIC" or "ACTION-VISUAL" or "STATE-METAPHORICAL",
+  "image_suitability": "HIGH" or "MEDIUM" or "LOW",
+  "word_type": "noun" or "verb" or "adjective" or "adverb" or "phrase",
+  "transformation_needed": true or false,
+  "transformation_suggestion": "",
+  "confidence": 0.9
+}`;
+
+      try {
+        console.log(`Testing categorization for "${word.original_text}"`);
+        
+        const response = await model.generateContent({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 200,
+            responseMimeType: 'application/json',
+          },
+          thinkingConfig: {
+            includeThoughts: false,
+          },
+        });
+        
+        const result = response.response;
+        const text = result.text().trim();
+        
+        console.log(`Response for "${word.original_text}":`, text);
+        console.log('Usage metadata:', result.usageMetadata);
+        
+        results.push({
+          word: word.original_text,
+          success: true,
+          response: text,
+          usage: result.usageMetadata
+        });
+      } catch (error) {
+        console.error(`Error for "${word.original_text}":`, error);
+        results.push({
+          word: word.original_text,
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+    
+    return NextResponse.json({ results });
+  } catch (error) {
+    return NextResponse.json({ error: 'Test failed', details: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
+  }
+}
+</file>
+
+<file path="app/api/test-gemini/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { getGeminiModel, handleGeminiError } from '@/lib/gemini';
+
+export async function GET() {
+  try {
+    // Check if API key exists
+    if (!process.env.GEMINI_API_KEY) {
+      return NextResponse.json({ 
+        error: 'GEMINI_API_KEY is not set in environment variables',
+        status: 'error' 
+      }, { status: 500 });
+    }
+    
+    const model = getGeminiModel();
+    
+    // Simple test prompt
+    const testPrompt = 'Return a simple JSON object: {"test": "success", "number": 42}';
+    
+    console.log('Testing Gemini API...');
+    
+    const response = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: testPrompt }] }],
+      generationConfig: {
+        temperature: 0.1,
+        topK: 1,
+        topP: 0.95,
+        maxOutputTokens: 100,
+      },
+    });
+    
+    const result = response.response;
+    const text = result.text().trim();
+    
+    console.log('Gemini test response:', text);
+    
+    return NextResponse.json({
+      status: 'success',
+      model: 'gemini-2.5-flash-preview-05-20',
+      response: text,
+      apiKeySet: true,
+    });
+  } catch (error) {
+    console.error('Gemini test error:', error);
+    const errorInfo = handleGeminiError(error);
+    
+    return NextResponse.json({
+      status: 'error',
+      error: errorInfo.message,
+      details: error instanceof Error ? error.message : 'Unknown error',
+    }, { status: errorInfo.status });
+  }
+}
+</file>
+
+<file path="app/theme.css">
+@theme {
+  /* Colors */
+  --color-notion-gray-50: #FAFAFA;
+  --color-notion-gray-100: #F7F7F7;
+  --color-notion-gray-200: #E5E5E5;
+  --color-notion-gray-300: #D4D4D4;
+  --color-notion-gray-400: #A3A3A3;
+  --color-notion-gray-500: #737373;
+  --color-notion-gray-600: #525252;
+  --color-notion-gray-700: #404040;
+  --color-notion-gray-800: #262626;
+  --color-notion-gray-900: #171717;
+  
+  --color-notion-blue: #0066CC;
+  --color-notion-green: #10B981;
+  --color-notion-red: #EF4444;
+  
+  /* Font Family */
+  --font-family-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  
+  /* Custom Spacing */
+  --spacing-18: 4.5rem;
+  --spacing-88: 22rem;
+  
+  /* Border Radius */
+  --radius-notion: 6px;
+  
+  /* Box Shadow */
+  --shadow-notion: 0 1px 3px rgba(0,0,0,0.1);
+  --shadow-notion-hover: 0 2px 8px rgba(0,0,0,0.15);
+}
+</file>
+
+<file path="components/ActivityLog.tsx">
+'use client';
+
+import { useState, useEffect } from 'react';
+import { X, AlertCircle, CheckCircle, Loader2, Info } from 'lucide-react';
+
+export interface ActivityItem {
+  id: string;
+  type: 'info' | 'success' | 'error' | 'loading';
+  message: string;
+  details?: string;
+  timestamp: Date;
+  operationKey?: string; // To track related operations
+}
+
+interface ActivityLogProps {
+  maxItems?: number;
+}
+
+// Global activity manager
+class ActivityManager {
+  private listeners: ((items: ActivityItem[]) => void)[] = [];
+  private items: ActivityItem[] = [];
+  private maxItems: number = 10;
+
+  subscribe(listener: (items: ActivityItem[]) => void) {
+    this.listeners.push(listener);
+    listener(this.items);
+    return () => {
+      this.listeners = this.listeners.filter(l => l !== listener);
+    };
+  }
+
+  addActivity(type: ActivityItem['type'], message: string, details?: string, operationKey?: string) {
+    const newItem: ActivityItem = {
+      id: `${Date.now()}-${Math.random()}`,
+      type,
+      message,
+      details,
+      timestamp: new Date(),
+      operationKey,
+    };
+
+    // If this is an error/success for an operation, remove any loading messages for the same operation
+    if ((type === 'error' || type === 'success') && operationKey) {
+      this.items = this.items.filter(item => 
+        !(item.type === 'loading' && item.operationKey === operationKey)
+      );
+    }
+
+    this.items = [newItem, ...this.items].slice(0, this.maxItems);
+    this.notifyListeners();
+
+    // Auto-remove success messages after 5 seconds
+    if (type === 'success') {
+      setTimeout(() => {
+        this.removeActivity(newItem.id);
+      }, 5000);
+    }
+  }
+
+  removeActivity(id: string) {
+    this.items = this.items.filter(item => item.id !== id);
+    this.notifyListeners();
+  }
+
+  clearAll() {
+    this.items = [];
+    this.notifyListeners();
+  }
+
+  private notifyListeners() {
+    this.listeners.forEach(listener => listener(this.items));
+  }
+}
+
+export const activityManager = new ActivityManager();
+
+export default function ActivityLog({ maxItems = 5 }: ActivityLogProps) {
+  const [activities, setActivities] = useState<ActivityItem[]>([]);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = activityManager.subscribe(setActivities);
+    return unsubscribe;
+  }, []);
+
+  const visibleActivities = isExpanded ? activities : activities.slice(0, maxItems);
+  const hasMore = activities.length > maxItems;
+
+  const getIcon = (type: ActivityItem['type']) => {
+    switch (type) {
+      case 'error':
+        return <AlertCircle className="h-4 w-4 text-red-500" />;
+      case 'success':
+        return <CheckCircle className="h-4 w-4 text-green-500" />;
+      case 'loading':
+        return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
+      default:
+        return <Info className="h-4 w-4 text-gray-500" />;
+    }
+  };
+
+  const getBackgroundColor = (type: ActivityItem['type']) => {
+    switch (type) {
+      case 'error':
+        return 'bg-red-900/20 border-red-800';
+      case 'success':
+        return 'bg-green-900/20 border-green-800';
+      case 'loading':
+        return 'bg-blue-900/20 border-blue-800';
+      default:
+        return 'bg-gray-800 border-gray-700';
+    }
+  };
+
+  if (activities.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="fixed top-4 right-4 z-50 w-96 space-y-2">
+      {visibleActivities.map((activity) => (
+        <div
+          key={activity.id}
+          className={`rounded-lg border p-3 shadow-sm transition-all duration-300 ${getBackgroundColor(activity.type)}`}
+        >
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0 mt-0.5">{getIcon(activity.type)}</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-gray-100">{activity.message}</p>
+              {activity.details && (
+                <p className="mt-1 text-xs text-gray-400 break-words">{activity.details}</p>
+              )}
+              <p className="mt-1 text-xs text-gray-500">
+                {activity.timestamp.toLocaleTimeString()}
+              </p>
+            </div>
+            <button
+              onClick={() => activityManager.removeActivity(activity.id)}
+              className="flex-shrink-0 p-1 hover:bg-gray-700 hover:bg-opacity-50 rounded transition-colors"
+            >
+              <X className="h-3 w-3 text-gray-400" />
+            </button>
+          </div>
+        </div>
+      ))}
+      
+      {hasMore && (
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="w-full text-center py-2 text-xs text-gray-400 hover:text-gray-300 transition-colors"
+        >
+          {isExpanded ? 'Show less' : `Show ${activities.length - maxItems} more`}
+        </button>
+      )}
+      
+      {activities.length > 1 && (
+        <button
+          onClick={() => activityManager.clearAll()}
+          className="w-full text-center py-1 text-xs text-gray-400 hover:text-gray-300 transition-colors"
+        >
+          Clear all
+        </button>
+      )}
+    </div>
+  );
+}
+</file>
+
+<file path="components/DemoButton.tsx">
+'use client';
+
+import { activityManager } from './ActivityLog';
+
+export default function DemoButton() {
+  const runDemo = () => {
+    // Simulate various activities
+    activityManager.addActivity('info', 'Starting demo sequence...');
+    
+    setTimeout(() => {
+      activityManager.addActivity('loading', 'Generating prompt for "genius"');
+    }, 500);
+    
+    setTimeout(() => {
+      activityManager.addActivity('success', 'Generated prompt for "genius"');
+    }, 2000);
+    
+    setTimeout(() => {
+      activityManager.addActivity('loading', 'Queuing image generation for "genius"');
+    }, 2500);
+    
+    setTimeout(() => {
+      activityManager.addActivity('error', 'Failed to generate image', 'Invalid API key. Please check your REPLICATE_API_TOKEN in .env.local');
+    }, 4000);
+  };
+
+  return (
+    <button
+      onClick={runDemo}
+      className="btn-secondary"
+    >
+      Demo Activity Log
+    </button>
+  );
+}
+</file>
+
+<file path="components/QueueStatus.tsx">
+'use client';
+
+import { useState, useEffect } from 'react';
+import { Clock, CheckCircle, XCircle, Loader } from 'lucide-react';
+
+interface QueueStatus {
+  total: number;
+  pending: number;
+  processing: number;
+  completed: number;
+  errors: number;
+  isProcessing: boolean;
+}
+
+export default function QueueStatus() {
+  const [status, setStatus] = useState<QueueStatus | null>(null);
+  const [isVisible, setIsVisible] = useState(false);
+
+  const fetchStatus = async () => {
+    try {
+      const response = await fetch('/api/queue-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'status' }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setStatus(data);
+        setIsVisible(data.total > 0);
+      }
+    } catch (error) {
+      console.error('Failed to fetch queue status:', error);
+    }
+  };
+
+  useEffect(() => {
+    // Initial fetch
+    fetchStatus();
+
+    // Poll every 2 seconds
+    const interval = setInterval(fetchStatus, 2000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!isVisible || !status) {
+    return null;
+  }
+
+  return (
+    <div className="fixed bottom-4 right-4 bg-gray-900 border border-gray-700 rounded-lg p-4 shadow-lg min-w-64 z-50">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-medium text-gray-100">Image Queue</h3>
+        <button
+          onClick={() => setIsVisible(false)}
+          className="text-gray-400 hover:text-gray-300"
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        {status.pending > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <Clock className="h-3 w-3 text-yellow-500" />
+            <span className="text-gray-300">Pending: {status.pending}</span>
+          </div>
+        )}
+
+        {status.processing > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <Loader className="h-3 w-3 text-blue-500 animate-spin" />
+            <span className="text-gray-300">Processing: {status.processing}</span>
+          </div>
+        )}
+
+        {status.completed > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <CheckCircle className="h-3 w-3 text-green-500" />
+            <span className="text-gray-300">Completed: {status.completed}</span>
+          </div>
+        )}
+
+        {status.errors > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <XCircle className="h-3 w-3 text-red-500" />
+            <span className="text-gray-300">Errors: {status.errors}</span>
+          </div>
+        )}
+
+        <div className="pt-2 border-t border-gray-700">
+          <div className="text-xs text-gray-400">
+            Total: {status.total} {status.isProcessing ? '(Active)' : '(Idle)'}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="data/gallery.json">
+{
+  "images": [
+    {
+      "id": 7876,
+      "filename": "7876.png",
+      "path": "/images/7876.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7877,
+      "filename": "7877.png",
+      "path": "/images/7877.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7878,
+      "filename": "7878.png",
+      "path": "/images/7878.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7879,
+      "filename": "7879.png",
+      "path": "/images/7879.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7880,
+      "filename": "7880.png",
+      "path": "/images/7880.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7881,
+      "filename": "7881.png",
+      "path": "/images/7881.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7882,
+      "filename": "7882.png",
+      "path": "/images/7882.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7883,
+      "filename": "7883.png",
+      "path": "/images/7883.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7884,
+      "filename": "7884.png",
+      "path": "/images/7884.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7885,
+      "filename": "7885.png",
+      "path": "/images/7885.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7886,
+      "filename": "7886.png",
+      "path": "/images/7886.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7887,
+      "filename": "7887.png",
+      "path": "/images/7887.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7888,
+      "filename": "7888.png",
+      "path": "/images/7888.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7889,
+      "filename": "7889.png",
+      "path": "/images/7889.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7890,
+      "filename": "7890.png",
+      "path": "/images/7890.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7891,
+      "filename": "7891.png",
+      "path": "/images/7891.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7892,
+      "filename": "7892.png",
+      "path": "/images/7892.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7893,
+      "filename": "7893.png",
+      "path": "/images/7893.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7894,
+      "filename": "7894.png",
+      "path": "/images/7894.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7895,
+      "filename": "7895.png",
+      "path": "/images/7895.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7896,
+      "filename": "7896.png",
+      "path": "/images/7896.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7897,
+      "filename": "7897.png",
+      "path": "/images/7897.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7898,
+      "filename": "7898.png",
+      "path": "/images/7898.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7899,
+      "filename": "7899.png",
+      "path": "/images/7899.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7900,
+      "filename": "7900.png",
+      "path": "/images/7900.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7901,
+      "filename": "7901.png",
+      "path": "/images/7901.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7902,
+      "filename": "7902.png",
+      "path": "/images/7902.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7903,
+      "filename": "7903.png",
+      "path": "/images/7903.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7904,
+      "filename": "7904.png",
+      "path": "/images/7904.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    },
+    {
+      "id": 7905,
+      "filename": "7905.png",
+      "path": "/images/7905.png",
+      "word": null,
+      "translation": null,
+      "prompt": null,
+      "created_at": "2025-05-28T13:26:12.269Z"
+    }
+  ],
+  "metadata": {
+    "total_count": 30,
+    "last_updated": "2025-05-28T13:26:12.269Z",
+    "version": "1.0"
+  }
+}
+</file>
+
+<file path="lib/db/migrations/002_add_categorization.ts">
+import { Kysely, sql } from 'kysely';
+
+export async function up(db: Kysely<any>) {
+  // Add categorization columns to word_entries table
+  await db.schema
+    .alterTable('word_entries')
+    .addColumn('categorization_primary_category', 'text', (col) =>
+      col.check(sql`categorization_primary_category IN ('CONCRETE-VISUAL', 'ABSTRACT-SYMBOLIC', 'ACTION-VISUAL', 'STATE-METAPHORICAL') OR categorization_primary_category IS NULL`)
+    )
+    .addColumn('categorization_image_suitability', 'text', (col) =>
+      col.check(sql`categorization_image_suitability IN ('HIGH', 'MEDIUM', 'LOW') OR categorization_image_suitability IS NULL`)
+    )
+    .addColumn('categorization_word_type', 'text', (col) =>
+      col.check(sql`categorization_word_type IN ('noun', 'verb', 'adjective', 'adverb', 'phrase') OR categorization_word_type IS NULL`)
+    )
+    .addColumn('categorization_transformation_needed', 'integer') // SQLite boolean
+    .addColumn('categorization_transformation_suggestion', 'text')
+    .addColumn('categorization_confidence', 'real')
+    .addColumn('categorization_status', 'text', (col) =>
+      col.notNull().defaultTo('none')
+        .check(sql`categorization_status IN ('none', 'processing', 'completed', 'error')`)
+    )
+    .execute();
+
+  // Create index for categorization status
+  await db.schema
+    .createIndex('idx_word_entries_categorization_status')
+    .on('word_entries')
+    .column('categorization_status')
+    .execute();
+}
+
+export async function down(db: Kysely<any>) {
+  // Drop the index
+  await db.schema
+    .dropIndex('idx_word_entries_categorization_status')
+    .execute();
+
+  // SQLite doesn't support dropping columns, would need to recreate table
+  // For development, it's easier to just reset the database if needed
+}
+</file>
+
+<file path="lib/db/migrations.ts">
+import { Kysely, sql } from 'kysely';
+
+export async function createTables(db: Kysely<any>) {
+  // Check if tables already exist
+  const tables = await sql<{ name: string }>`
+    SELECT name FROM sqlite_master 
+    WHERE type='table' AND name='word_entries'
+  `.execute(db);
+  
+  if (tables.rows.length > 0) {
+    return; // Tables already exist
+  }
+  
+  // Create word_entries table
+  await db.schema
+    .createTable('word_entries')
+    .addColumn('id', 'integer', (col) => col.primaryKey())
+    .addColumn('original_text', 'text', (col) => col.notNull())
+    .addColumn('translation_text', 'text', (col) => col.notNull())
+    .addColumn('level_id', 'integer', (col) => col.notNull())
+    .addColumn('transcription', 'text', (col) => col.notNull())
+    .addColumn('prompt', 'text')
+    .addColumn('image_url', 'text')
+    .addColumn('image_status', 'text', (col) => 
+      col.notNull().defaultTo('none')
+        .check(sql`image_status IN ('none', 'queued', 'processing', 'completed', 'error')`)
+    )
+    .addColumn('prompt_status', 'text', (col) => 
+      col.notNull().defaultTo('none')
+        .check(sql`prompt_status IN ('none', 'generating', 'completed', 'error')`)
+    )
+    .addColumn('replicate_id', 'text')
+    .addColumn('qa_score', 'text', (col) =>
+      col.check(sql`qa_score IN ('good', 'bad') OR qa_score IS NULL`)
+    )
+    .addColumn('image_generated_at', 'text')
+    .addColumn('created_at', 'text', (col) => 
+      col.notNull().defaultTo(sql`CURRENT_TIMESTAMP`)
+    )
+    .addColumn('updated_at', 'text', (col) => 
+      col.notNull().defaultTo(sql`CURRENT_TIMESTAMP`)
+    )
+    .execute();
+  
+  // Create indexes for performance
+  await db.schema
+    .createIndex('idx_word_entries_level_id')
+    .on('word_entries')
+    .column('level_id')
+    .execute();
+  
+  await db.schema
+    .createIndex('idx_word_entries_image_status')
+    .on('word_entries')
+    .column('image_status')
+    .execute();
+  
+  await db.schema
+    .createIndex('idx_word_entries_prompt_status')
+    .on('word_entries')
+    .column('prompt_status')
+    .execute();
+}
+</file>
+
+<file path="lib/db/runMigrations.ts">
+import { getDatabase } from './database';
+import { sql } from 'kysely';
+import { up as addCategorizationMigration } from './migrations/002_add_categorization';
+
+export async function runMigrations() {
+  const db = getDatabase();
+  
+  try {
+    // Check if categorization columns exist
+    const columns = await sql<{ name: string }>`
+      PRAGMA table_info(word_entries)
+    `.execute(db);
+    
+    const hasCategorizationColumns = columns.rows.some(
+      col => col.name.startsWith('categorization_')
+    );
+    
+    if (!hasCategorizationColumns) {
+      console.log('Running categorization migration...');
+      await addCategorizationMigration(db);
+      console.log('Categorization migration completed.');
+    }
+  } catch (error) {
+    console.error('Migration error:', error);
+    throw error;
+  }
+}
+</file>
+
+<file path="lib/apiClient.ts">
+import { WordEntry, CategorizationResult } from '@/types';
+
+// Generic API response type
+export interface ApiResponse<T = any> {
+  data?: T;
+  error?: string;
+  status: number;
+}
+
+// Request payload types
+export interface GeneratePromptPayload {
+  english: string;
+  russian: string;
+  transcription: string;
+}
+
+export interface QueueImagePayload {
+  action: 'add';
+  entryId: number;
+  englishWord: string;
+  prompt: string;
+}
+
+export interface GeneratePromptsBatchPayload {
+  entries: Array<{
+    id: number;
+    english: string;
+    russian: string;
+    transcription: string;
+  }>;
+}
+
+export interface CategorizeVocabularyPayload {
+  entries: Array<{
+    id: number;
+    original_text: string;
+    translation_text: string;
+    level_id: number;
+  }>;
+}
+
+export interface RegenerateImagePayload {
+  entryId: number;
+  prompt: string;
+}
+
+export interface LanguageCardsPayload {
+  word: string;
+}
+
+// Response types
+export interface GeneratePromptResponse {
+  prompt: string;
+}
+
+export interface QueueImageResponse {
+  status: string;
+  imageUrl?: string;
+  generatedAt?: string;
+}
+
+export interface GeneratePromptsBatchResponse {
+  prompts: Array<{
+    id: number;
+    prompt: string;
+  }>;
+}
+
+export interface CategorizeVocabularyResponse {
+  results: Array<{
+    id: number;
+    categorization: CategorizationResult;
+  }>;
+  errors: Array<{
+    id: number;
+    error: string;
+  }>;
+}
+
+export interface RegenerateImageResponse {
+  success: boolean;
+  imageUrl?: string;
+  generatedAt?: string;
+  error?: string;
+}
+
+export interface LanguageCardsResponse {
+  cards: WordEntry[];
+  totalWords: number;
+}
+
+// Generic API call utility
+async function apiCall<T>(
+  endpoint: string,
+  options: {
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+    body?: any;
+  } = {}
+): Promise<ApiResponse<T>> {
+  const { method = 'GET', body } = options;
+
+  try {
+    const response = await fetch(endpoint, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      ...(body && { body: JSON.stringify(body) }),
+    });
+
+    const status = response.status;
+
+    if (!response.ok) {
+      // Try to parse error message from response
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      return {
+        error: errorData.error || `HTTP ${status}`,
+        status,
+      };
+    }
+
+    const data = await response.json();
+    return {
+      data,
+      status,
+    };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : 'Network error',
+      status: 0,
+    };
+  }
+}
+
+// Service functions
+export async function generatePromptService(
+  payload: GeneratePromptPayload
+): Promise<ApiResponse<GeneratePromptResponse>> {
+  return apiCall<GeneratePromptResponse>('/api/generate-prompt', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function queueImageService(
+  payload: QueueImagePayload
+): Promise<ApiResponse<QueueImageResponse>> {
+  return apiCall<QueueImageResponse>('/api/queue-image', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function generatePromptsBatchService(
+  payload: GeneratePromptsBatchPayload
+): Promise<ApiResponse<GeneratePromptsBatchResponse>> {
+  return apiCall<GeneratePromptsBatchResponse>('/api/generate-prompts-batch', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function categorizeVocabularyService(
+  payload: CategorizeVocabularyPayload
+): Promise<ApiResponse<CategorizeVocabularyResponse>> {
+  return apiCall<CategorizeVocabularyResponse>('/api/categorize-vocabulary', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function regenerateImageService(
+  payload: RegenerateImagePayload
+): Promise<ApiResponse<RegenerateImageResponse>> {
+  return apiCall<RegenerateImageResponse>('/api/generate-image', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function fetchLanguageCardsService(
+  payload: LanguageCardsPayload
+): Promise<ApiResponse<LanguageCardsResponse>> {
+  return apiCall<LanguageCardsResponse>(`/api/language-cards?word=${encodeURIComponent(payload.word)}`, {
+    method: 'GET',
+  });
+}
+</file>
+
+<file path="lib/batchUtils.ts">
+import { WordEntry } from '@/types';
+import { ApiResponse } from './apiClient';
+import { activityManager } from '@/components/ActivityLog';
+
+export interface BatchProcessorConfig<TPayload, TResult, TError> {
+  itemsToProcess: WordEntry[];
+  batchSize: number;
+  delayBetweenBatchesMs: number;
+  operationName: string;
+  getBatchPayload: (batch: WordEntry[]) => TPayload;
+  batchApiService: (payload: TPayload) => Promise<ApiResponse<any>>;
+  getSuccessItems: (responseData: any) => TResult[];
+  getErrorItems: (responseData: any) => TError[];
+  processItemSuccess: (itemResult: TResult, originalEntry: WordEntry) => void;
+  processItemError: (itemError: TError, originalEntry?: WordEntry) => void;
+  onStartProcessingItem?: (entry: WordEntry) => void;
+}
+
+export interface BatchProcessorResult {
+  totalProcessed: number;
+  totalSuccess: number;
+  totalFailed: number;
+}
+
+export async function processBatch<TPayload, TResult extends { id: number }, TError extends { id?: number }>(
+  config: BatchProcessorConfig<TPayload, TResult, TError>
+): Promise<BatchProcessorResult> {
+  const {
+    itemsToProcess,
+    batchSize,
+    delayBetweenBatchesMs,
+    operationName,
+    getBatchPayload,
+    batchApiService,
+    getSuccessItems,
+    getErrorItems,
+    processItemSuccess,
+    processItemError,
+    onStartProcessingItem
+  } = config;
+  const operationKey = `batch-${operationName.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
+
+  let totalProcessed = 0;
+  let totalSuccess = 0;
+  let totalFailed = 0;
+
+  activityManager.addActivity(operationKey, `Starting ${operationName}...`, 'info');
+
+  const batches = [];
+  for (let i = 0; i < itemsToProcess.length; i += batchSize) {
+    batches.push(itemsToProcess.slice(i, i + batchSize));
+  }
+
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const batch = batches[batchIndex];
+    const batchNumber = batchIndex + 1;
+
+    if (onStartProcessingItem) {
+      batch.forEach(entry => onStartProcessingItem(entry));
+    }
+
+    activityManager.addActivity(
+      `${operationKey}-batch-${batchNumber}`,
+      `Processing batch ${batchNumber} of ${batches.length} (${batch.length} items)...`,
+      'info'
+    );
+
+    try {
+      const payload = getBatchPayload(batch);
+      const response = await batchApiService(payload);
+
+      if (response.error) {
+        activityManager.addActivity(
+          `${operationKey}-batch-${batchNumber}-error`,
+          `Batch ${batchNumber} failed: ${response.error}`,
+          'error'
+        );
+        
+        batch.forEach(entry => {
+          processItemError({ id: entry.id } as TError, entry);
+          totalFailed++;
+        });
+      } else if (response.data) {
+        const successItems = getSuccessItems(response.data);
+        const errorItems = getErrorItems(response.data);
+
+        successItems.forEach(result => {
+          const originalEntry = batch.find(entry => entry.id === result.id);
+          if (originalEntry) {
+            processItemSuccess(result, originalEntry);
+            totalSuccess++;
+          }
+        });
+
+        errorItems.forEach(error => {
+          const originalEntry = error.id ? batch.find(entry => entry.id === error.id) : undefined;
+          processItemError(error, originalEntry);
+          totalFailed++;
+          
+          if (error.id && 'error' in error) {
+            activityManager.addActivity(
+              `${operationKey}-item-${error.id}-error`,
+              `Item ${error.id} failed: ${(error as any).error}`,
+              'error'
+            );
+          }
+        });
+
+        activityManager.addActivity(
+          `${operationKey}-batch-${batchNumber}-complete`,
+          `Batch ${batchNumber} completed: ${successItems.length} successful, ${errorItems.length} failed`,
+          'success'
+        );
+      }
+
+      totalProcessed += batch.length;
+
+      if (batchIndex < batches.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, delayBetweenBatchesMs));
+      }
+    } catch (error) {
+      activityManager.addActivity(
+        `${operationKey}-batch-${batchNumber}-exception`,
+        `Batch ${batchNumber} encountered an error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'error'
+      );
+      
+      batch.forEach(entry => {
+        processItemError({ id: entry.id } as TError, entry);
+        totalFailed++;
+      });
+      
+      totalProcessed += batch.length;
+    }
+  }
+
+  activityManager.addActivity(
+    `${operationKey}-complete`,
+    `${operationName} completed: ${totalSuccess} successful, ${totalFailed} failed out of ${totalProcessed} processed`,
+    totalFailed === 0 ? 'success' : 'warning'
+  );
+
+  return {
+    totalProcessed,
+    totalSuccess,
+    totalFailed
+  };
+}
+</file>
+
+<file path="lib/replicateConfig.ts">
+// Centralized Replicate configuration - single source of truth
+export const REPLICATE_CONFIG = {
+  model: "fofr/sdxl-emoji:dee76b5afde21b0f01ed7925f0665b7e879c50ee718c5f78a9d38e04d523cc5e",
+  
+  // Image generation parameters
+  input: {
+    negative_prompt: "multiple objects, collection, many, crowd, group, realistic, photographic, 3d render, dark skin, black skin",
+    width: 1024,
+    height: 1024,
+    num_outputs: 1,
+    num_inference_steps: 50,
+    guidance_scale: 7.5,
+    scheduler: "K_EULER" as const,
+    lora_scale: 0.6,
+    refine: "no_refiner" as const,
+    apply_watermark: false,
+    high_noise_frac: 0.8,
+    prompt_strength: 0.8,
+    disable_safety_checker: true,
+  }
+} as const;
+
+// Function to create input with prompt
+export function createReplicateInput(prompt: string) {
+  return {
+    ...REPLICATE_CONFIG.input,
+    prompt: `A TOK emoji of ${prompt}`,
+  };
+}
+
+// Function to get model identifier
+export function getReplicateModel() {
+  return REPLICATE_CONFIG.model;
+}
+</file>
+
+<file path="public/file.svg">
+<svg fill="none" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M14.5 13.5V5.41a1 1 0 0 0-.3-.7L9.8.29A1 1 0 0 0 9.08 0H1.5v13.5A2.5 2.5 0 0 0 4 16h8a2.5 2.5 0 0 0 2.5-2.5m-1.5 0v-7H8v-5H3v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1M9.5 5V2.12L12.38 5zM5.13 5h-.62v1.25h2.12V5zm-.62 3h7.12v1.25H4.5zm.62 3h-.62v1.25h7.12V11z" clip-rule="evenodd" fill="#666" fill-rule="evenodd"/></svg>
+</file>
+
+<file path="public/globe.svg">
+<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g clip-path="url(#a)"><path fill-rule="evenodd" clip-rule="evenodd" d="M10.27 14.1a6.5 6.5 0 0 0 3.67-3.45q-1.24.21-2.7.34-.31 1.83-.97 3.1M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16m.48-1.52a7 7 0 0 1-.96 0H7.5a4 4 0 0 1-.84-1.32q-.38-.89-.63-2.08a40 40 0 0 0 3.92 0q-.25 1.2-.63 2.08a4 4 0 0 1-.84 1.31zm2.94-4.76q1.66-.15 2.95-.43a7 7 0 0 0 0-2.58q-1.3-.27-2.95-.43a18 18 0 0 1 0 3.44m-1.27-3.54a17 17 0 0 1 0 3.64 39 39 0 0 1-4.3 0 17 17 0 0 1 0-3.64 39 39 0 0 1 4.3 0m1.1-1.17q1.45.13 2.69.34a6.5 6.5 0 0 0-3.67-3.44q.65 1.26.98 3.1M8.48 1.5l.01.02q.41.37.84 1.31.38.89.63 2.08a40 40 0 0 0-3.92 0q.25-1.2.63-2.08a4 4 0 0 1 .85-1.32 7 7 0 0 1 .96 0m-2.75.4a6.5 6.5 0 0 0-3.67 3.44 29 29 0 0 1 2.7-.34q.31-1.83.97-3.1M4.58 6.28q-1.66.16-2.95.43a7 7 0 0 0 0 2.58q1.3.27 2.95.43a18 18 0 0 1 0-3.44m.17 4.71q-1.45-.12-2.69-.34a6.5 6.5 0 0 0 3.67 3.44q-.65-1.27-.98-3.1" fill="#666"/></g><defs><clipPath id="a"><path fill="#fff" d="M0 0h16v16H0z"/></clipPath></defs></svg>
+</file>
+
+<file path="public/next.svg">
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 394 80"><path fill="#000" d="M262 0h68.5v12.7h-27.2v66.6h-13.6V12.7H262V0ZM149 0v12.7H94v20.4h44.3v12.6H94v21h55v12.6H80.5V0h68.7zm34.3 0h-17.8l63.8 79.4h17.9l-32-39.7 32-39.6h-17.9l-23 28.6-23-28.6zm18.3 56.7-9-11-27.1 33.7h17.8l18.3-22.7z"/><path fill="#000" d="M81 79.3 17 0H0v79.3h13.6V17l50.2 62.3H81Zm252.6-.4c-1 0-1.8-.4-2.5-1s-1.1-1.6-1.1-2.6.3-1.8 1-2.5 1.6-1 2.6-1 1.8.3 2.5 1a3.4 3.4 0 0 1 .6 4.3 3.7 3.7 0 0 1-3 1.8zm23.2-33.5h6v23.3c0 2.1-.4 4-1.3 5.5a9.1 9.1 0 0 1-3.8 3.5c-1.6.8-3.5 1.3-5.7 1.3-2 0-3.7-.4-5.3-1s-2.8-1.8-3.7-3.2c-.9-1.3-1.4-3-1.4-5h6c.1.8.3 1.6.7 2.2s1 1.2 1.6 1.5c.7.4 1.5.5 2.4.5 1 0 1.8-.2 2.4-.6a4 4 0 0 0 1.6-1.8c.3-.8.5-1.8.5-3V45.5zm30.9 9.1a4.4 4.4 0 0 0-2-3.3 7.5 7.5 0 0 0-4.3-1.1c-1.3 0-2.4.2-3.3.5-.9.4-1.6 1-2 1.6a3.5 3.5 0 0 0-.3 4c.3.5.7.9 1.3 1.2l1.8 1 2 .5 3.2.8c1.3.3 2.5.7 3.7 1.2a13 13 0 0 1 3.2 1.8 8.1 8.1 0 0 1 3 6.5c0 2-.5 3.7-1.5 5.1a10 10 0 0 1-4.4 3.5c-1.8.8-4.1 1.2-6.8 1.2-2.6 0-4.9-.4-6.8-1.2-2-.8-3.4-2-4.5-3.5a10 10 0 0 1-1.7-5.6h6a5 5 0 0 0 3.5 4.6c1 .4 2.2.6 3.4.6 1.3 0 2.5-.2 3.5-.6 1-.4 1.8-1 2.4-1.7a4 4 0 0 0 .8-2.4c0-.9-.2-1.6-.7-2.2a11 11 0 0 0-2.1-1.4l-3.2-1-3.8-1c-2.8-.7-5-1.7-6.6-3.2a7.2 7.2 0 0 1-2.4-5.7 8 8 0 0 1 1.7-5 10 10 0 0 1 4.3-3.5c2-.8 4-1.2 6.4-1.2 2.3 0 4.4.4 6.2 1.2 1.8.8 3.2 2 4.3 3.4 1 1.4 1.5 3 1.5 5h-5.8z"/></svg>
+</file>
+
+<file path="public/vercel.svg">
+<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1155 1000"><path d="m577.3 0 577.4 1000H0z" fill="#fff"/></svg>
+</file>
+
+<file path="public/window.svg">
+<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill-rule="evenodd" clip-rule="evenodd" d="M1.5 2.5h13v10a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1zM0 1h16v11.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 0 12.5zm3.75 4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5M7 4.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0m1.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5" fill="#666"/></svg>
+</file>
+
+<file path="utils/migrate-to-sqlite.ts">
+#!/usr/bin/env node
+
+/**
+ * Migration utility to transfer data from localStorage to SQLite database
+ * Run this script to migrate existing data: npx tsx utils/migrate-to-sqlite.ts
+ */
+
+import { languageCardRepository } from '../lib/db/repository';
+import { WordEntry } from '../types';
+import fs from 'fs';
+import path from 'path';
+
+// Mock localStorage for Node.js environment
+const STORAGE_FILE = path.join(process.cwd(), '.localStorage-backup.json');
+
+interface LocalStorageData {
+  state: {
+    entries: WordEntry[];
+  };
+}
+
+async function loadFromLocalStorage(): Promise<WordEntry[]> {
+  console.log('🔍 Looking for localStorage data...');
+  
+  // In a real browser environment, this would read from actual localStorage
+  // For the migration script, we'll need to export the data first
+  console.log(`
+To migrate your data:
+
+1. Open your application in the browser
+2. Open the browser console (F12)
+3. Run this command to export your data:
+
+const data = localStorage.getItem('language-card-storage');
+if (data) {
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'language-cards-export.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  console.log('Data exported! Check your downloads folder.');
+} else {
+  console.log('No data found in localStorage');
+}
+
+4. Place the downloaded 'language-cards-export.json' file in the project root
+5. Run this migration script again
+  `);
+  
+  // Check if export file exists
+  const exportFile = path.join(process.cwd(), 'language-cards-export.json');
+  if (fs.existsSync(exportFile)) {
+    console.log('✅ Found export file: language-cards-export.json');
+    const data = JSON.parse(fs.readFileSync(exportFile, 'utf-8'));
+    
+    // Parse the localStorage format
+    const parsedData: LocalStorageData = JSON.parse(data);
+    
+    if (parsedData.state && Array.isArray(parsedData.state.entries)) {
+      return parsedData.state.entries;
+    }
+  }
+  
+  return [];
+}
+
+async function migrateToSQLite() {
+  try {
+    console.log('🚀 Starting migration from localStorage to SQLite...\n');
+    
+    // Load data from localStorage export
+    const entries = await loadFromLocalStorage();
+    
+    if (entries.length === 0) {
+      console.log('❌ No data found to migrate.');
+      return;
+    }
+    
+    console.log(`📊 Found ${entries.length} entries to migrate\n`);
+    
+    // Check if database already has data
+    const existingEntries = await languageCardRepository.findAll();
+    if (existingEntries.length > 0) {
+      console.log(`⚠️  Database already contains ${existingEntries.length} entries.`);
+      console.log('Do you want to continue? This will merge the data.');
+      // In a real scenario, you'd want to prompt for confirmation
+    }
+    
+    // Migrate entries in batches
+    const BATCH_SIZE = 100;
+    let migrated = 0;
+    
+    for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+      const batch = entries.slice(i, i + BATCH_SIZE);
+      
+      try {
+        await languageCardRepository.bulkUpsert(batch);
+        migrated += batch.length;
+        
+        const progress = Math.round((migrated / entries.length) * 100);
+        console.log(`Progress: ${progress}% (${migrated}/${entries.length} entries)`);
+      } catch (error) {
+        console.error(`❌ Error migrating batch ${i / BATCH_SIZE + 1}:`, error);
+      }
+    }
+    
+    console.log(`\n✅ Migration completed! ${migrated} entries migrated to SQLite.`);
+    
+    // Verify migration
+    const dbEntries = await languageCardRepository.findAll();
+    console.log(`📊 Database now contains ${dbEntries.length} total entries.`);
+    
+    // Create backup of localStorage data
+    const backupFile = path.join(process.cwd(), `localStorage-backup-${Date.now()}.json`);
+    fs.writeFileSync(backupFile, JSON.stringify({ entries }, null, 2));
+    console.log(`💾 Backup saved to: ${backupFile}`);
+    
+    console.log('\n🎉 Migration successful! You can now use the application with SQLite database.');
+    console.log('The localStorage data will remain as fallback until you clear it manually.');
+    
+  } catch (error) {
+    console.error('❌ Migration failed:', error);
+    process.exit(1);
+  }
+}
+
+// Run migration
+migrateToSQLite().catch(console.error);
+</file>
+
+<file path=".eslintrc.json">
+{
+  "extends": ["next/core-web-vitals", "next/typescript"]
+}
+</file>
+
+<file path="nodemon.json">
+{
+  "watch": [
+    "app",
+    "components",
+    "lib",
+    "store",
+    "types"
+  ],
+  "ext": "ts,tsx,js,jsx,json",
+  "ignore": [
+    ".next/*",
+    "node_modules/*",
+    "public/images/*",
+    ".git/*"
+  ],
+  "exec": "next dev",
+  "delay": "500"
+}
+</file>
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}
+</file>
+
+<file path="app/api/generate-image/route.ts">
+import Replicate from 'replicate';
+import { NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
+import { getReplicateModel, createReplicateInput } from '@/lib/replicateConfig';
+
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN!,
+});
+
+export async function POST(request: Request) {
+  try {
+    const { prompt, entryId, englishWord } = await request.json();
+
+    if (!prompt || !entryId || !englishWord) {
+      return NextResponse.json(
+        { error: 'Missing required fields' },
+        { status: 400 }
+      );
+    }
+
+    const output = await replicate.run(
+      getReplicateModel(),
+      {
+        input: createReplicateInput(prompt),
+      }
+    );
+
+    console.log('Raw output from replicate.run:', output);
+    console.log('Output type:', typeof output);
+    console.log('Is array?', Array.isArray(output));
+
+    // The output from replicate.run() is typically an array of FileOutput objects
+    // For SDXL-emoji with num_outputs: 1, it should be an array with one FileOutput
+    let imageUrl: string;
+    
+    if (Array.isArray(output) && output.length > 0) {
+      // Get the first FileOutput object and call .url() to get the URL
+      const fileOutput = output[0] as any;
+      const urlResult = fileOutput.url ? fileOutput.url() : fileOutput.toString();
+      imageUrl = urlResult.toString(); // Convert URL object to string
+      console.log('Extracted imageUrl from FileOutput:', imageUrl);
+    } else if (output && typeof output === 'object' && 'url' in output) {
+      // Handle case where it might be a single FileOutput object
+      const urlResult = (output as any).url();
+      imageUrl = urlResult.toString(); // Convert URL object to string
+      console.log('Extracted imageUrl from single FileOutput:', imageUrl);
+    } else if (typeof output === 'string') {
+      // Handle case where it might already be a URL string
+      imageUrl = output;
+      console.log('Output was already a string URL:', imageUrl);
+    } else {
+      console.error('Unexpected output format:', output);
+      throw new Error('Unexpected output format from Replicate');
+    }
+    
+    // Validate that we got a valid URL
+    if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.startsWith('http')) {
+      console.error('Invalid imageUrl received:', imageUrl);
+      return NextResponse.json(
+        { error: 'Failed to get a valid image URL' },
+        { status: 500 }
+      );
+    }
+
+    // Download and save the image locally
+    try {
+      console.log('Downloading image from:', imageUrl);
+      const response = await fetch(imageUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.statusText}`);
+      }
+      
+      const imageBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(imageBuffer);
+      
+      // Create images directory if it doesn't exist
+      const imagesDir = path.join(process.cwd(), 'public', 'images');
+      if (!fs.existsSync(imagesDir)) {
+        fs.mkdirSync(imagesDir, { recursive: true });
+      }
+      
+      // Use entry ID as filename - simple and unique
+      const filename = `${entryId}.png`;
+      const filepath = path.join(imagesDir, filename);
+      
+      // Save the file
+      fs.writeFileSync(filepath, buffer);
+      console.log('Image saved to:', filepath);
+      
+      // Return both the original URL and the local path with cache-busting timestamp
+      const timestamp = Date.now();
+      const localImageUrl = `/images/${filename}?t=${timestamp}`;
+      const generatedAt = new Date().toISOString();
+      
+      return NextResponse.json({ 
+        imageUrl: localImageUrl, // Return local path with cache-buster for the app to use
+        originalUrl: imageUrl,    // Keep original URL as backup
+        localPath: filepath,
+        filename: filename,
+        status: 'completed',
+        generatedAt: generatedAt, // Add timestamp for sorting
+      });
+    } catch (downloadError) {
+      console.error('Error downloading/saving image:', downloadError);
+      // If download fails, still return the original URL
+      return NextResponse.json({ 
+        imageUrl,
+        status: 'completed',
+        downloadError: 'Failed to save image locally, using remote URL',
+      });
+    }
+  } catch (error: any) {
+    console.error('Error generating image:', error);
+    
+    // Handle specific Replicate API errors
+    if (error.message?.includes('Invalid token') || error.message?.includes('Unauthorized')) {
+      return NextResponse.json(
+        { error: 'Invalid API token. Please check your REPLICATE_API_TOKEN in .env.local' },
+        { status: 401 }
+      );
+    }
+    
+    if (error.message?.includes('rate limit')) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Please try again later.' },
+        { status: 429 }
+      );
+    }
+    
+    return NextResponse.json(
+      { error: error.message || 'Failed to generate image' },
+      { status: 500 }
+    );
+  }
+}
+</file>
+
+<file path="app/api/generate-prompt/route.ts">
+import { NextResponse } from 'next/server';
+import { getGeminiModel, formatSinglePrompt, handleGeminiError } from '@/lib/gemini';
+
+export async function POST(request: Request) {
+  try {
+    const { english, russian, transcription } = await request.json();
+
+    if (!english || !russian || !transcription) {
+      return NextResponse.json(
+        { error: 'Missing required fields' },
+        { status: 400 }
+      );
+    }
+
+    const model = getGeminiModel();
+    const prompt = formatSinglePrompt(english, russian, transcription);
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+
+    return NextResponse.json({ prompt: text });
+  } catch (error: any) {
+    const errorInfo = handleGeminiError(error);
+    return NextResponse.json(
+      { error: errorInfo.message },
+      { status: errorInfo.status }
+    );
+  }
+}
+</file>
+
+<file path="app/globals.css">
+@import "tailwindcss";
+
+@theme {
+  --color-notion-gray-50: #0A0A0A;
+  --color-notion-gray-100: #171717;
+  --color-notion-gray-200: #262626;
+  --color-notion-gray-300: #404040;
+  --color-notion-gray-400: #525252;
+  --color-notion-gray-500: #737373;
+  --color-notion-gray-600: #A3A3A3;
+  --color-notion-gray-700: #D4D4D4;
+  --color-notion-gray-800: #E5E5E5;
+  --color-notion-gray-900: #F7F7F7;
+  --color-notion-blue: #3B82F6;
+  --color-notion-green: #10B981;
+  --color-notion-red: #EF4444;
+  
+  --radius-notion: 3px;
+  --shadow-notion: 0 1px 3px rgba(255,255,255,0.1);
+  --shadow-notion-hover: 0 2px 8px rgba(255,255,255,0.15);
+}
+
+:root {
+  --background: 0 0 0;
+  --foreground: 255 255 255;
+}
+
+body {
+  color: rgb(var(--foreground));
+  background: rgb(var(--background));
+  font-family: 'JetBrains Mono', 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Fira Mono', 'Droid Sans Mono', 'Courier New', monospace;
+}
+
+/* Custom utility classes */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  background-color: var(--color-notion-blue);
+  color: white;
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--radius-notion);
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: all 0.2s;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: #0052A3;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 102, 204, 0.2);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  background-color: var(--color-notion-gray-100);
+  color: var(--color-notion-gray-800);
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--color-notion-gray-200);
+  border-radius: var(--radius-notion);
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: all 0.2s;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--color-notion-gray-200);
+  border-color: var(--color-notion-gray-300);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(255, 255, 255, 0.05);
+}
+
+.btn-secondary:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.input-field {
+  width: 100%;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--color-notion-gray-200);
+  border-radius: var(--radius-notion);
+  font-size: 0.875rem;
+}
+
+.input-field:focus {
+  outline: none;
+  border-color: var(--color-notion-blue);
+  box-shadow: 0 0 0 1px var(--color-notion-blue);
+}
+
+.table-header {
+  background-color: var(--color-notion-gray-50);
+  color: var(--color-notion-gray-600);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.table-row {
+  border-bottom: 1px solid var(--color-notion-gray-100);
+  transition: background-color 0.2s;
+}
+
+.table-row:hover {
+  background-color: var(--color-notion-gray-50);
+}
+
+.card {
+  background-color: var(--color-notion-gray-100);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  box-shadow: var(--shadow-notion);
+  transition: box-shadow 0.2s;
+  border: 1px solid var(--color-notion-gray-200);
+}
+
+.card:hover {
+  box-shadow: var(--shadow-notion-hover);
+  border-color: var(--color-notion-gray-300);
+}
+
+.tab-active {
+  border-bottom: 2px solid var(--color-notion-blue);
+  color: var(--color-notion-blue);
+  font-weight: 500;
+}
+
+.tab-inactive {
+  color: var(--color-notion-gray-500);
+  transition: color 0.2s;
+}
+
+.tab-inactive:hover {
+  color: var(--color-notion-gray-700);
+}
+
+.loading-spinner {
+  animation: spin 1s linear infinite;
+  height: 0.75rem;
+  width: 0.75rem;
+  border: 2px solid var(--color-notion-gray-700);
+  border-top-color: var(--color-notion-blue);
+  border-radius: 50%;
+  display: inline-block;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Card flip animation */
+.card-container {
+  perspective: 1000px;
+}
+
+.card-flip {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.5s;
+  transform-style: preserve-3d;
+  cursor: pointer;
+}
+
+.card-flip.flipped {
+  transform: rotateY(180deg);
+}
+
+.card-face {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  backface-visibility: hidden;
+}
+
+.card-back {
+  transform: rotateY(180deg);
+}
+</file>
+
+<file path="app/layout.tsx">
+import type { Metadata } from "next";
+import { JetBrains_Mono } from "next/font/google";
+import "./globals.css";
+import { Toaster } from 'react-hot-toast';
+import ActivityLog from '@/components/ActivityLog';
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains",
+});
+
+export const metadata: Metadata = {
+  title: "Language Learning Card Generator",
+  description: "Generate emoji-style images for language learning cards",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en">
+      <body className={`${jetbrainsMono.variable} font-mono antialiased`}>
+        {children}
+        <ActivityLog />
+        <Toaster
+          position="bottom-right"
+          toastOptions={{
+            style: {
+              background: '#171717',
+              color: '#E5E5E5',
+              border: '1px solid #404040',
+              borderRadius: '6px',
+              fontSize: '14px',
+            },
+            success: {
+              iconTheme: {
+                primary: '#10B981',
+                secondary: '#171717',
+              },
+            },
+            error: {
+              iconTheme: {
+                primary: '#EF4444',
+                secondary: '#171717',
+              },
+            },
+          }}
+        />
+      </body>
+    </html>
+  );
+}
+</file>
+
+<file path="components/ASCIILogo.tsx">
+export default function ASCIILogo() {
+  return (
+    <pre className="text-[8px] sm:text-[10px] md:text-xs leading-[0.8] text-gray-500 select-none font-mono">
+{
+`
+$$\\                                                                                 
+\\__|                                                                                
+$$\\ $$$$$$\\$$$$\\   $$$$$$\\   $$$$$$\\   $$$$$$\\         $$$$$$\\   $$$$$$\\  $$$$$$$\\  
+$$ |$$  _$$  _$$\\  \\____$$\\ $$  __$$\\ $$  __$$\\       $$  __$$\\ $$  __$$\\ $$  __$$\\ 
+$$ |$$ / $$ / $$ | $$$$$$$ |$$ /  $$ |$$$$$$$$ |      $$ /  $$ |$$$$$$$$ |$$ |  $$ |
+$$ |$$ | $$ | $$ |$$  __$$ |$$ |  $$ |$$   ____|      $$ |  $$ |$$   ____|$$ |  $$ |
+$$ |$$ | $$ | $$ |\\$$$$$$$ |\\$$$$$$$ |\\$$$$$$$\\       \\$$$$$$$ |\\$$$$$$$\\ $$ |  $$ |
+\\__|\\__| \\__| \\__| \\_______| \\____$$ | \\_______|       \\____$$ | \\_______|\\__|  \\__|
+                            $$\\   $$ |                $$\\   $$ |                    
+                            \\$$$$$$  |                \\$$$$$$  |                    
+                             \\______/                  \\______/                     
+`
+    }</pre>
+  );
+}
+</file>
+
+<file path="components/FileUpload.tsx">
+'use client';
+
+import { useCallback } from 'react';
+import { useDropzone } from 'react-dropzone';
+import { useAppStore } from '@/store/useAppStore';
+import { JSONImportData, WordEntry } from '@/types';
+import { Upload, AlertCircle } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { activityManager } from './ActivityLog';
+
+export default function FileUpload() {
+  const { setEntries } = useAppStore();
+
+  const processJSONFile = (data: JSONImportData[]): WordEntry[] => {
+    return data.map((item) => ({
+      ...item,
+      prompt: '',
+      imageUrl: '',
+      imageStatus: 'none',
+      promptStatus: 'none',
+      replicateId: '',
+    }));
+  };
+
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
+    const file = acceptedFiles[0];
+    if (!file) return;
+
+    const operationKey = `upload-${Date.now()}`;
+    activityManager.addActivity('loading', `Processing ${file.name}...`, undefined, operationKey);
+
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text) as JSONImportData[];
+
+      // Validate JSON structure
+      if (!Array.isArray(data)) {
+        throw new Error('JSON must be an array');
+      }
+
+      const requiredFields = ['id', 'original_text', 'translation_text', 'level_id', 'transcription'];
+      const invalidItems = data.filter((item, index) => {
+        const missingFields = requiredFields.filter(field => !(field in item));
+        if (missingFields.length > 0) {
+          console.error(`Item at index ${index} missing fields:`, missingFields);
+          return true;
+        }
+        return false;
+      });
+
+      if (invalidItems.length > 0) {
+        throw new Error(`${invalidItems.length} items have missing required fields`);
+      }
+
+      const entries = processJSONFile(data);
+      setEntries(entries);
+      
+      const levels = [...new Set(entries.map(e => e.level_id))].length;
+      activityManager.addActivity('success', `Loaded ${entries.length} entries`, `${levels} difficulty levels found`, operationKey);
+    } catch (error) {
+      console.error('Error processing file:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to process file';
+      activityManager.addActivity('error', 'Failed to process file', errorMessage, operationKey);
+    }
+  }, [setEntries]);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      'application/json': ['.json']
+    },
+    maxFiles: 1
+  });
+
+  return (
+    <div className="max-w-4xl mx-auto">
+      <div className="bg-gray-900 rounded-lg p-8 shadow-sm border border-gray-800">
+        <div
+          {...getRootProps()}
+          className={`
+            border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors
+            ${isDragActive 
+              ? 'border-blue-600 bg-blue-900/20' 
+              : 'border-gray-700 hover:border-gray-600'
+            }
+          `}
+        >
+          <input {...getInputProps()} />
+          <Upload className="mx-auto h-12 w-12 mb-4 text-gray-500" />
+          
+          {isDragActive ? (
+            <p className="font-medium text-gray-300">Drop the JSON file here...</p>
+          ) : (
+            <>
+              <p className="font-medium mb-2 text-gray-300">
+                Drag and drop your JSON file here
+              </p>
+              <p className="text-sm text-gray-400">
+                or click to select a file
+              </p>
+            </>
+          )}
+        </div>
+
+        <div className="mt-6 p-4 rounded-lg bg-gray-800 border border-gray-700">
+          <div className="flex items-start">
+            <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5 text-blue-600" />
+            <div className="ml-3">
+              <h3 className="text-sm font-medium text-gray-100">Expected JSON format</h3>
+              <pre className="mt-2 text-xs overflow-x-auto text-gray-400">
+{`[
+  {
+    "id": 11643,
+    "original_text": "genius",
+    "translation_text": "гений",
+    "level_id": 70,
+    "transcription": "[ˈʤiːnjəs]"
+  }
+]`}
+              </pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="lib/db/database.ts">
+import Database from 'better-sqlite3';
+import { Kysely, SqliteDialect } from 'kysely';
+import { Database as DatabaseType, DB } from './schema';
+import { createTables } from './migrations';
+import { runMigrations } from './runMigrations';
+import path from 'path';
+
+let db: DB | null = null;
+
+export function getDatabase(): DB {
+  if (!db) {
+    const dbPath = process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'language-cards.db');
+    
+    const sqlite = new Database(dbPath);
+    sqlite.pragma('journal_mode = WAL');
+    
+    db = new Kysely<DatabaseType>({
+      dialect: new SqliteDialect({
+        database: sqlite,
+      }),
+    });
+    
+    // Initialize tables if they don't exist
+    createTables(db);
+    
+    // Run migrations
+    runMigrations();
+  }
+  
+  return db;
+}
+
+export function closeDatabase(): void {
+  if (db) {
+    db.destroy();
+    db = null;
+  }
+}
+</file>
+
+<file path="lib/db/repository.ts">
+import { getDatabase } from './database';
+import { WordEntryTable } from './schema';
+import { WordEntry } from '@/types';
+
+export class LanguageCardRepository {
+  private get db() {
+    return getDatabase();
+  }
+
+  async create(entry: Omit<WordEntry, 'imageStatus' | 'promptStatus'>): Promise<WordEntry> {
+    const result = await this.db
+      .insertInto('word_entries')
+      .values({
+        id: entry.id,
+        original_text: entry.original_text,
+        translation_text: entry.translation_text,
+        level_id: entry.level_id,
+        transcription: entry.transcription,
+        prompt: entry.prompt || null,
+        image_url: entry.imageUrl || null,
+        image_status: 'none',
+        prompt_status: 'none',
+        categorization_status: 'none',
+        replicate_id: entry.replicateId || null,
+        qa_score: entry.qaScore || null,
+        image_generated_at: entry.imageGeneratedAt || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+
+    return this.mapToWordEntry(result);
+  }
+
+  async update(id: number, updates: Partial<WordEntry>): Promise<WordEntry | null> {
+    const dbUpdates: Partial<WordEntryTable> = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (updates.original_text !== undefined) dbUpdates.original_text = updates.original_text;
+    if (updates.translation_text !== undefined) dbUpdates.translation_text = updates.translation_text;
+    if (updates.level_id !== undefined) dbUpdates.level_id = updates.level_id;
+    if (updates.transcription !== undefined) dbUpdates.transcription = updates.transcription;
+    if (updates.prompt !== undefined) dbUpdates.prompt = updates.prompt || null;
+    if (updates.imageUrl !== undefined) dbUpdates.image_url = updates.imageUrl || null;
+    if (updates.imageStatus !== undefined) dbUpdates.image_status = updates.imageStatus;
+    if (updates.promptStatus !== undefined) dbUpdates.prompt_status = updates.promptStatus;
+    if (updates.replicateId !== undefined) dbUpdates.replicate_id = updates.replicateId || null;
+    if (updates.qaScore !== undefined) dbUpdates.qa_score = updates.qaScore || null;
+    if (updates.imageGeneratedAt !== undefined) dbUpdates.image_generated_at = updates.imageGeneratedAt || null;
+    
+    // Handle categorization updates
+    if (updates.categorization !== undefined) {
+      const cat = updates.categorization;
+      dbUpdates.categorization_primary_category = cat.primary_category;
+      dbUpdates.categorization_image_suitability = cat.image_suitability;
+      dbUpdates.categorization_word_type = cat.word_type;
+      dbUpdates.categorization_transformation_needed = cat.transformation_needed ? 1 : 0;
+      dbUpdates.categorization_transformation_suggestion = cat.transformation_suggestion;
+      dbUpdates.categorization_confidence = cat.confidence;
+    }
+    if (updates.categorizationStatus !== undefined) dbUpdates.categorization_status = updates.categorizationStatus;
+
+    const result = await this.db
+      .updateTable('word_entries')
+      .set(dbUpdates)
+      .where('id', '=', id)
+      .returningAll()
+      .executeTakeFirst();
+
+    return result ? this.mapToWordEntry(result) : null;
+  }
+
+  async delete(id: number): Promise<boolean> {
+    const result = await this.db
+      .deleteFrom('word_entries')
+      .where('id', '=', id)
+      .execute();
+
+    return result.length > 0;
+  }
+
+  async findById(id: number): Promise<WordEntry | null> {
+    const result = await this.db
+      .selectFrom('word_entries')
+      .selectAll()
+      .where('id', '=', id)
+      .executeTakeFirst();
+
+    return result ? this.mapToWordEntry(result) : null;
+  }
+
+  async findAll(): Promise<WordEntry[]> {
+    const results = await this.db
+      .selectFrom('word_entries')
+      .selectAll()
+      .orderBy('id', 'asc')
+      .execute();
+
+    return results.map(this.mapToWordEntry);
+  }
+
+  async upsert(entry: WordEntry): Promise<WordEntry> {
+    const existing = await this.findById(entry.id);
+    
+    if (existing) {
+      return await this.update(entry.id, entry) || existing;
+    } else {
+      return await this.create(entry);
+    }
+  }
+
+  async bulkUpsert(entries: WordEntry[]): Promise<WordEntry[]> {
+    const results: WordEntry[] = [];
+    
+    // Use a transaction for better performance
+    await this.db.transaction().execute(async (trx) => {
+      for (const entry of entries) {
+        const existing = await trx
+          .selectFrom('word_entries')
+          .selectAll()
+          .where('id', '=', entry.id)
+          .executeTakeFirst();
+
+        let result: WordEntryTable;
+        
+        if (existing) {
+          result = await trx
+            .updateTable('word_entries')
+            .set({
+              original_text: entry.original_text,
+              translation_text: entry.translation_text,
+              level_id: entry.level_id,
+              transcription: entry.transcription,
+              prompt: entry.prompt || null,
+              image_url: entry.imageUrl || null,
+              image_status: entry.imageStatus,
+              prompt_status: entry.promptStatus,
+              categorization_status: entry.categorizationStatus || 'none',
+              replicate_id: entry.replicateId || null,
+              qa_score: entry.qaScore || null,
+              image_generated_at: entry.imageGeneratedAt || null,
+              updated_at: new Date().toISOString(),
+            })
+            .where('id', '=', entry.id)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+        } else {
+          result = await trx
+            .insertInto('word_entries')
+            .values({
+              id: entry.id,
+              original_text: entry.original_text,
+              translation_text: entry.translation_text,
+              level_id: entry.level_id,
+              transcription: entry.transcription,
+              prompt: entry.prompt || null,
+              image_url: entry.imageUrl || null,
+              image_status: entry.imageStatus,
+              prompt_status: entry.promptStatus,
+              categorization_status: entry.categorizationStatus || 'none',
+              replicate_id: entry.replicateId || null,
+              qa_score: entry.qaScore || null,
+              image_generated_at: entry.imageGeneratedAt || null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .returningAll()
+            .executeTakeFirstOrThrow();
+        }
+        
+        results.push(this.mapToWordEntry(result));
+      }
+    });
+    
+    return results;
+  }
+
+  private mapToWordEntry(row: WordEntryTable): WordEntry {
+    const entry: WordEntry = {
+      id: row.id,
+      original_text: row.original_text,
+      translation_text: row.translation_text,
+      level_id: row.level_id,
+      transcription: row.transcription,
+      prompt: row.prompt || undefined,
+      imageUrl: row.image_url || undefined,
+      imageStatus: row.image_status,
+      promptStatus: row.prompt_status,
+      replicateId: row.replicate_id || undefined,
+      qaScore: row.qa_score,
+      imageGeneratedAt: row.image_generated_at || undefined,
+    };
+    
+    // Map categorization if present
+    if (row.categorization_primary_category) {
+      entry.categorization = {
+        primary_category: row.categorization_primary_category,
+        image_suitability: row.categorization_image_suitability!,
+        word_type: row.categorization_word_type!,
+        transformation_needed: row.categorization_transformation_needed === 1,
+        transformation_suggestion: row.categorization_transformation_suggestion || '',
+        confidence: row.categorization_confidence || 0,
+      };
+    }
+    
+    entry.categorizationStatus = row.categorization_status || 'none';
+    
+    return entry;
+  }
+}
+
+// Export singleton instance
+export const languageCardRepository = new LanguageCardRepository();
+</file>
+
+<file path="lib/db/schema.ts">
+import { Kysely } from 'kysely';
+
+export interface WordEntryTable {
+  id: number;
+  original_text: string;
+  translation_text: string;
+  level_id: number;
+  transcription: string;
+  prompt: string | null;
+  image_url: string | null;
+  image_status: 'none' | 'queued' | 'processing' | 'completed' | 'error';
+  prompt_status: 'none' | 'generating' | 'completed' | 'error';
+  replicate_id: string | null;
+  qa_score: 'good' | 'bad' | null;
+  image_generated_at: string | null;
+  categorization_primary_category: 'CONCRETE-VISUAL' | 'ABSTRACT-SYMBOLIC' | 'ACTION-VISUAL' | 'STATE-METAPHORICAL' | null;
+  categorization_image_suitability: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  categorization_word_type: 'noun' | 'verb' | 'adjective' | 'adverb' | 'phrase' | null;
+  categorization_transformation_needed: boolean | null;
+  categorization_transformation_suggestion: string | null;
+  categorization_confidence: number | null;
+  categorization_status: 'none' | 'processing' | 'completed' | 'error';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Database {
+  word_entries: WordEntryTable;
+}
+
+export type DB = Kysely<Database>;
+</file>
+
+<file path="lib/gemini.ts">
+import { GoogleGenerativeAI } from '@google/generative-ai';
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+
+export const GEMINI_MODEL = 'gemini-2.5-flash-preview-05-20';
+
+export const CORE_PROMPT_INSTRUCTIONS = `Generate ONE emoji object for: {english_word}
+
+Rules:
+1. Object MUST visually represent the word's meaning
+2. Maximum 4 words
+3. Single object only
+4. Choose most memorable/iconic association
+5. If describing people, use light-skinned or yellow emoji-style characters
+6. FORBIDDEN: "vibrant", "representing", "showing", generic descriptions
+
+Think: What visual helps remember this word?
+
+Examples:
+"autumn" → "orange fall leaf" (NOT green leaf)
+"winter" → "snowflake" (NOT generic season)
+"happy" → "smiling face"
+"article" → "newspaper"
+"above" → "upward arrow"
+"actor" → "light-skinned man in suit"
+
+Word: {english_word}
+Single object:`;
+
+export const PROMPT_TEMPLATE = `${CORE_PROMPT_INSTRUCTIONS}
+
+English: {english} {transcription}
+Russian: {russian}`;
+
+export const BATCH_PROMPT_TEMPLATE = `For each word below, generate ONE emoji object following these rules:
+
+1. Object MUST visually represent the word's meaning
+2. Maximum 4 words
+3. Single object only
+4. Choose most memorable/iconic association
+5. If describing people, use light-skinned or yellow emoji-style characters
+6. FORBIDDEN: "vibrant", "representing", "showing", generic descriptions
+
+Think: What visual helps remember this word?
+
+Examples:
+"autumn" → "orange fall leaf" (NOT green leaf)
+"winter" → "snowflake" (NOT generic season)
+"happy" → "smiling face"
+"article" → "newspaper"
+"above" → "upward arrow"
+"actor" → "light-skinned man in suit"
+
+Return your response as a JSON array where each object has an "id" field matching the input id and a "prompt" field with the single object description.
+
+Word pairs:
+{wordPairs}
+
+Return valid JSON only, no markdown formatting.`;
+
+export function getGeminiModel() {
+  return genAI.getGenerativeModel({ 
+    model: GEMINI_MODEL,
+    systemInstruction: 'Output only valid JSON. No explanations.'
+  });
+}
+
+export function formatSinglePrompt(english: string, russian: string, transcription: string): string {
+  return PROMPT_TEMPLATE
+    .replace('{english_word}', english)
+    .replace('{english}', english)
+    .replace('{transcription}', transcription)
+    .replace('{russian}', russian);
+}
+
+export function formatBatchPrompt(entries: Array<{ id: number; english: string; russian: string; transcription: string }>): string {
+  const wordPairs = entries.map(entry => 
+    `ID: ${entry.id}\nEnglish: ${entry.english} ${entry.transcription}\nRussian: ${entry.russian}`
+  ).join('\n\n');
+  
+  return BATCH_PROMPT_TEMPLATE.replace('{wordPairs}', wordPairs);
+}
+
+export function handleGeminiError(error: any) {
+  console.error('Gemini API Error:', error);
+  
+  if (error.message?.includes('API_KEY_INVALID') || error.message?.includes('Invalid API key')) {
+    return {
+      message: 'Invalid API key. Please check your GEMINI_API_KEY in .env.local',
+      status: 401
+    };
+  }
+  
+  if (error.message?.includes('not found') || error.message?.includes('404')) {
+    return {
+      message: 'Gemini model not available. Please check the model name.',
+      status: 404
+    };
+  }
+  
+  if (error.message?.includes('RATE_LIMIT_EXCEEDED') || error.message?.includes('quota')) {
+    return {
+      message: 'Rate limit exceeded. Please try again later.',
+      status: 429
+    };
+  }
+  
+  return {
+    message: error.message || 'Failed to generate content',
+    status: 500
+  };
+}
+</file>
+
+<file path="lib/imageQueue.ts">
+import Replicate from 'replicate';
+import { getReplicateModel, createReplicateInput } from './replicateConfig';
+
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN!,
+});
+
+interface QueueItem {
+  id: string;
+  entryId: number;
+  englishWord: string;
+  prompt: string;
+  predictionId?: string;
+  status: 'pending' | 'processing' | 'completed' | 'error';
+  retries: number;
+  createdAt: Date;
+}
+
+class ImageGenerationQueue {
+  private queue: QueueItem[] = [];
+  private processing = false;
+  private maxRetries = 3;
+  private concurrentLimit = 1; // Process one at a time to avoid rate limits
+  private processingCount = 0;
+
+  // Add item to queue
+  async addToQueue(entryId: number, englishWord: string, prompt: string): Promise<string> {
+    // Check if this entry is already in queue
+    const existingItem = this.queue.find(item => item.entryId === entryId);
+    if (existingItem) {
+      console.log(`Entry ${entryId} (${englishWord}) already in queue with status: ${existingItem.status}`);
+      return existingItem.id;
+    }
+
+    const queueId = `queue-${Date.now()}-${entryId}`;
+    const item: QueueItem = {
+      id: queueId,
+      entryId,
+      englishWord,
+      prompt,
+      status: 'pending',
+      retries: 0,
+      createdAt: new Date(),
+    };
+
+    this.queue.push(item);
+    console.log(`Added to queue: ${englishWord} (${queueId}) - Total queue: ${this.queue.length}`);
+    
+    // Start processing if not already running
+    if (!this.processing) {
+      this.startProcessing();
+    }
+
+    return queueId;
+  }
+
+  // Start processing queue
+  private async startProcessing() {
+    if (this.processing) {
+      console.log('Processing already running, skipping...');
+      return;
+    }
+    
+    this.processing = true;
+    console.log(`Starting image queue processing... Total items: ${this.queue.length}`);
+
+    while (this.queue.length > 0) {
+      const pendingItems = this.queue.filter(item => item.status === 'pending');
+      console.log(`Queue status: Total=${this.queue.length}, Pending=${pendingItems.length}`);
+      
+      const item = pendingItems[0]; // Get first pending item
+      if (!item) {
+        console.log('No pending items, waiting...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+
+      console.log(`Processing next item: ${item.englishWord} (${item.id})`);
+      
+      // Process one item at a time (sequential processing)
+      await this.processItem(item);
+      
+      // Small delay between items to avoid overwhelming the API
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    this.processing = false;
+    console.log('Queue processing finished - no more items');
+  }
+
+  // Process individual item
+  private async processItem(item: QueueItem) {
+    while (item.status === 'pending' && item.retries < this.maxRetries) {
+      try {
+        console.log(`Processing: ${item.englishWord} (${item.id}) - Attempt ${item.retries + 1}`);
+        item.status = 'processing';
+
+        // Create prediction (async) using centralized config
+        const prediction = await replicate.predictions.create({
+          version: getReplicateModel(),
+          input: createReplicateInput(item.prompt),
+        });
+
+        item.predictionId = prediction.id;
+        console.log(`Created prediction: ${prediction.id} for ${item.englishWord}`);
+
+        // Wait for completion
+        const result = await replicate.wait(prediction);
+        
+        if (result.status === 'succeeded' && result.output) {
+          await this.handleSuccess(item, result.output);
+          return; // Success - exit the retry loop
+        } else {
+          throw new Error(`Prediction failed: ${result.error || 'Unknown error'}`);
+        }
+
+      } catch (error) {
+        console.error(`Attempt ${item.retries + 1} failed for ${item.englishWord}:`, error);
+        item.retries++;
+        
+        if (item.retries < this.maxRetries) {
+          console.log(`Retrying ${item.englishWord} (attempt ${item.retries + 1}/${this.maxRetries}) after delay`);
+          item.status = 'pending';
+          // Add delay before retry (exponential backoff)
+          await new Promise(resolve => setTimeout(resolve, 5000 * item.retries));
+        } else {
+          console.error(`Max retries reached for ${item.englishWord} (${item.id})`);
+          item.status = 'error';
+          
+          // Notify error
+          this.notifyError(item, (error as Error).message || 'Generation failed');
+          
+          // Remove from queue
+          this.removeFromQueue(item.id);
+          return; // Exit retry loop
+        }
+      }
+    }
+  }
+
+  // Handle successful generation
+  private async handleSuccess(item: QueueItem, output: any) {
+    try {
+      console.log(`Success: ${item.englishWord} (${item.id})`);
+      
+      // Get image URL from output
+      let imageUrl: string;
+      if (Array.isArray(output) && output.length > 0) {
+        const fileOutput = output[0] as any;
+        imageUrl = fileOutput.url ? fileOutput.url().toString() : fileOutput.toString();
+      } else {
+        throw new Error('Invalid output format');
+      }
+
+      // Download and save image
+      const downloadResult = await this.downloadAndSaveImage(imageUrl, item.entryId);
+      
+      item.status = 'completed';
+      
+      // Notify completion via callback or event
+      this.notifyCompletion(item, {
+        imageUrl: downloadResult.localImageUrl,
+        originalUrl: imageUrl,
+        generatedAt: new Date().toISOString(),
+      });
+
+      // Remove from queue
+      this.removeFromQueue(item.id);
+
+    } catch (error) {
+      console.error(`Error processing success for ${item.englishWord}:`, error);
+      throw error; // Re-throw to be handled by processItem
+    }
+  }
+
+
+  // Download and save image locally
+  private async downloadAndSaveImage(imageUrl: string, entryId: number) {
+    const fs = require('fs');
+    const path = require('path');
+
+    const response = await fetch(imageUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.statusText}`);
+    }
+    
+    const imageBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(imageBuffer);
+    
+    // Create images directory if it doesn't exist
+    const imagesDir = path.join(process.cwd(), 'public', 'images');
+    if (!fs.existsSync(imagesDir)) {
+      fs.mkdirSync(imagesDir, { recursive: true });
+    }
+    
+    // Use entry ID as filename - simple and unique
+    const filename = `${entryId}.png`;
+    const filepath = path.join(imagesDir, filename);
+    
+    // Save file
+    fs.writeFileSync(filepath, buffer);
+    
+    // Return local URL with cache buster
+    const timestamp = Date.now();
+    const localImageUrl = `/images/${filename}?t=${timestamp}`;
+    
+    return { localImageUrl, filepath, filename };
+  }
+
+  // Remove item from queue
+  private removeFromQueue(queueId: string) {
+    const index = this.queue.findIndex(item => item.id === queueId);
+    if (index > -1) {
+      const item = this.queue[index];
+      this.queue.splice(index, 1);
+      console.log(`Removed from queue: ${item.englishWord} (${queueId}) - Remaining: ${this.queue.length}`);
+    } else {
+      console.log(`Item not found in queue for removal: ${queueId}`);
+    }
+  }
+
+  // Get queue status
+  getQueueStatus() {
+    const status = {
+      total: this.queue.length,
+      pending: this.queue.filter(item => item.status === 'pending').length,
+      processing: this.queue.filter(item => item.status === 'processing').length,
+      completed: this.queue.filter(item => item.status === 'completed').length,
+      errors: this.queue.filter(item => item.status === 'error').length,
+      isProcessing: this.processing,
+    };
+    
+    return status;
+  }
+
+  // Get queue items
+  getQueueItems() {
+    return this.queue.map(item => ({
+      id: item.id,
+      entryId: item.entryId,
+      englishWord: item.englishWord,
+      status: item.status,
+      retries: item.retries,
+      createdAt: item.createdAt,
+      predictionId: item.predictionId,
+    }));
+  }
+
+  // Callback methods (to be overridden)
+  protected notifyCompletion(item: QueueItem, result: any) {
+    // Override this method to handle completion
+    console.log(`✅ Completed: ${item.englishWord}`);
+  }
+
+  protected notifyError(item: QueueItem, error: string) {
+    // Override this method to handle errors
+    console.log(`❌ Error: ${item.englishWord} - ${error}`);
+  }
+
+  protected notifyProgress(item: QueueItem, status: string) {
+    // Override this method to handle progress updates
+    console.log(`🔄 Progress: ${item.englishWord} - ${status}`);
+  }
+}
+
+// Export singleton instance
+export const imageQueue = new ImageGenerationQueue();
+export type { QueueItem };
+</file>
+
+<file path="store/useAppStore.ts">
+import { create } from 'zustand';
+import { WordEntry, AppState } from '@/types';
+
+interface AppStore extends AppState {
+  setEntries: (entries: WordEntry[]) => void;
+  updateEntry: (id: number, updates: Partial<WordEntry>) => void;
+  setCurrentPage: (page: number) => void;
+  setItemsPerPage: (items: number) => void;
+  setSearchQuery: (query: string) => void;
+  setLevelFilter: (level: number | null) => void;
+  setSortBy: (field: string) => void;
+  setSortOrder: (order: 'asc' | 'desc') => void;
+  setActiveTab: (tab: 'table' | 'gallery') => void;
+  getFilteredEntries: () => WordEntry[];
+  clearData: () => void;
+  syncWithDatabase: () => Promise<void>;
+  loadFromDatabase: () => Promise<void>;
+  isInitialized: boolean;
+}
+
+const initialState: AppState = {
+  entries: [],
+  currentPage: 1,
+  itemsPerPage: 100,
+  searchQuery: '',
+  levelFilter: null,
+  sortBy: 'id',
+  sortOrder: 'asc',
+  activeTab: 'table',
+};
+
+export const useAppStore = create<AppStore>()((set, get) => ({
+      ...initialState,
+      isInitialized: false,
+      
+      setEntries: async (entries) => {
+        set({ entries, currentPage: 1 });
+        
+        // Sync to database in background
+        try {
+          await fetch('/api/language-cards', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(entries),
+          });
+        } catch (error) {
+          console.error('Failed to sync entries to database:', error);
+        }
+      },
+      
+      updateEntry: async (id, updates) => {
+        set((state) => ({
+          entries: state.entries.map((entry) =>
+            entry.id === id ? { ...entry, ...updates } : entry
+          ),
+        }));
+        
+        // Update in database
+        try {
+          await fetch('/api/language-cards', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, updates }),
+          });
+        } catch (error) {
+          console.error('Failed to update entry in database:', error);
+        }
+      },
+      
+      setCurrentPage: (currentPage) => set({ currentPage }),
+      setItemsPerPage: (itemsPerPage) => set({ itemsPerPage, currentPage: 1 }),
+      setSearchQuery: (searchQuery) => set({ searchQuery, currentPage: 1 }),
+      setLevelFilter: (levelFilter) => set({ levelFilter, currentPage: 1 }),
+      setSortBy: (sortBy) => set({ sortBy }),
+      setSortOrder: (sortOrder) => set({ sortOrder }),
+      setActiveTab: (activeTab) => set({ activeTab }),
+      
+      getFilteredEntries: () => {
+        const state = get();
+        let filtered = [...state.entries];
+        
+        // Apply search filter
+        if (state.searchQuery) {
+          const query = state.searchQuery.toLowerCase();
+          filtered = filtered.filter(
+            (entry) =>
+              entry.original_text.toLowerCase().includes(query) ||
+              entry.translation_text.toLowerCase().includes(query) ||
+              entry.transcription.toLowerCase().includes(query) ||
+              (entry.prompt && entry.prompt.toLowerCase().includes(query))
+          );
+        }
+        
+        // Apply level filter
+        if (state.levelFilter !== null) {
+          filtered = filtered.filter((entry) => entry.level_id === state.levelFilter);
+        }
+        
+        // Apply sorting
+        filtered.sort((a, b) => {
+          let aVal = a[state.sortBy as keyof WordEntry];
+          let bVal = b[state.sortBy as keyof WordEntry];
+          
+          if (aVal === undefined || bVal === undefined) return 0;
+          
+          if (typeof aVal === 'string' && typeof bVal === 'string') {
+            aVal = aVal.toLowerCase();
+            bVal = bVal.toLowerCase();
+          }
+          
+          if (aVal < bVal) return state.sortOrder === 'asc' ? -1 : 1;
+          if (aVal > bVal) return state.sortOrder === 'asc' ? 1 : -1;
+          return 0;
+        });
+        
+        return filtered;
+      },
+      
+      clearData: async () => {
+        set(initialState);
+        // Note: We don't clear the database here to preserve data
+      },
+      
+      syncWithDatabase: async () => {
+        const state = get();
+        if (state.entries.length > 0) {
+          try {
+            await fetch('/api/language-cards', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(state.entries),
+            });
+          } catch (error) {
+            console.error('Failed to sync with database:', error);
+          }
+        }
+      },
+      
+      loadFromDatabase: async () => {
+        try {
+          const response = await fetch('/api/language-cards');
+          if (response.ok) {
+            const entries = await response.json();
+            if (entries.length > 0) {
+              set({ entries, isInitialized: true });
+            } else {
+              set({ isInitialized: true });
+            }
+          } else {
+            set({ isInitialized: true });
+          }
+        } catch (error) {
+          console.error('Failed to load from database:', error);
+          set({ isInitialized: true });
+        }
+      },
+    }));
+
+// Initialize database on first load
+if (typeof window !== 'undefined') {
+  useAppStore.getState().loadFromDatabase();
+}
+</file>
+
+<file path=".gitignore">
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# generated images
+/public/images
+
+# database files
+/data/*.db
+/data/*.db-journal
+/data/*.db-wal
+*.db
+*.db-journal
+*.db-wal
+
+# localStorage exports
+language-cards-export.json
+localStorage-backup-*.json
+.localStorage-backup.json
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+</file>
+
+<file path="postcss.config.mjs">
+const config = {
+  plugins: {
+    "@tailwindcss/postcss": {},
+  },
+};
+export default config;
+</file>
+
+<file path="app/page.tsx">
+'use client';
+
+import { useState } from 'react';
+import { useAppStore } from '@/store/useAppStore';
+import FileUpload from '@/components/FileUpload';
+import DataTable from '@/components/DataTable';
+import Gallery from '@/components/Gallery';
+import ASCIILogo from '@/components/ASCIILogo';
+import QueueStatus from '@/components/QueueStatus';
+import { FileText, Image } from 'lucide-react';
+
+export default function Home() {
+  const { entries, activeTab, setActiveTab } = useAppStore();
+  const hasData = entries.length > 0;
+
+  return (
+    <div className="min-h-screen bg-black">
+
+      <main className="px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-8 flex justify-center">
+          <ASCIILogo />
+        </div>
+        
+        {!hasData ? (
+          <FileUpload />
+        ) : (
+          <>
+            <div className="mb-6 bg-gray-900 rounded-lg shadow-sm border border-gray-800">
+              <div className="border-b border-gray-800">
+                <nav className="flex -mb-px">
+                  <button
+                    onClick={() => setActiveTab('table')}
+                    className={`
+                      group inline-flex items-center px-6 py-4 text-sm font-medium transition-colors
+                      ${activeTab === 'table' ? 'tab-active' : 'tab-inactive'}
+                    `}
+                  >
+                    <FileText className="mr-2 h-4 w-4" />
+                    [TABLE]
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('gallery')}
+                    className={`
+                      group inline-flex items-center px-6 py-4 text-sm font-medium transition-colors
+                      ${activeTab === 'gallery' ? 'tab-active' : 'tab-inactive'}
+                    `}
+                  >
+                    <Image className="mr-2 h-4 w-4" />
+                    [GALLERY]
+                  </button>
+                </nav>
+              </div>
+              
+              <div className="p-6">
+                {activeTab === 'table' ? <DataTable /> : <Gallery />}
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+      
+      {/* Queue Status - shows when there are items in queue */}
+      <QueueStatus />
+    </div>
+  );
+}
+</file>
+
+<file path="components/Gallery.tsx">
+'use client';
+
+import { useState, useMemo, useEffect } from 'react';
+import { useAppStore } from '@/store/useAppStore';
+import { WordEntry } from '@/types';
+import { RefreshCw, Download } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { activityManager } from './ActivityLog';
+import { queueImageService } from '@/lib/apiClient';
+
+export default function Gallery() {
+  const { entries, updateEntry } = useAppStore();
+  const [qaFilter, setQaFilter] = useState<'all' | 'good' | 'bad' | 'unrated'>('all');
+  const [galleryImages, setGalleryImages] = useState<any[]>([]);
+
+  // Load gallery images from JSON
+  useEffect(() => {
+    fetch('/api/gallery')
+      .then(res => res.json())
+      .then(data => setGalleryImages(data.images || []))
+      .catch(err => console.error('Failed to load gallery:', err));
+  }, []);
+
+  const entriesWithImages = useMemo(() => {
+    return entries.filter(entry => entry.imageUrl && entry.imageStatus === 'completed');
+  }, [entries]);
+
+  // Combine entries with standalone gallery images
+  const allImages = useMemo(() => {
+    const entryImages = entriesWithImages.map(entry => ({
+      ...entry,
+      source: 'entries'
+    }));
+    
+    const standaloneImages = galleryImages
+      .filter(img => !entriesWithImages.find(entry => entry.id === img.id))
+      .map(img => {
+        // Find matching entry from all entries (including those without images)
+        const matchingEntry = entries.find(entry => entry.id === img.id);
+        
+        return {
+          id: img.id,
+          original_text: matchingEntry?.original_text || `Image ${img.id}`,
+          translation_text: matchingEntry?.translation_text || '',
+          transcription: matchingEntry?.transcription || '',
+          imageUrl: `/images/${img.id}.png`,
+          imageStatus: 'completed',
+          source: 'gallery',
+          prompt: matchingEntry?.prompt
+        };
+      });
+    
+    return [...entryImages, ...standaloneImages];
+  }, [entriesWithImages, galleryImages, entries]);
+
+  const filteredEntries = useMemo(() => {
+    let filtered = allImages;
+    
+    // Apply QA filter
+    if (qaFilter === 'good') {
+      filtered = filtered.filter(entry => entry.qaScore === 'good');
+    } else if (qaFilter === 'bad') {
+      filtered = filtered.filter(entry => entry.qaScore === 'bad');
+    } else if (qaFilter === 'unrated') {
+      filtered = filtered.filter(entry => !entry.qaScore);
+    }
+    
+    // Sort by generation date - newest images first
+    filtered.sort((a, b) => {
+      const dateA = a.imageGeneratedAt ? new Date(a.imageGeneratedAt).getTime() : 0;
+      const dateB = b.imageGeneratedAt ? new Date(b.imageGeneratedAt).getTime() : 0;
+      return dateB - dateA; // Descending order - newest first, oldest last
+    });
+    
+    return filtered;
+  }, [allImages, qaFilter]);
+
+  const handleQaScore = (entryId: number, score: 'good' | 'bad') => {
+    updateEntry(entryId, { qaScore: score });
+    toast.success(`Marked as ${score === 'good' ? '✅ Good' : '❌ Bad'}`);
+  };
+
+  const handleRegenerateImage = async (entry: WordEntry) => {
+    if (!entry.prompt) {
+      toast.error('No prompt available for regeneration');
+      return;
+    }
+
+    const operationKey = `regen-image-${entry.id}`;
+    updateEntry(entry.id, { imageStatus: 'queued' });
+    activityManager.addActivity('loading', `Queuing regeneration for "${entry.original_text}"`, undefined, operationKey);
+    
+    const result = await queueImageService({
+      action: 'add',
+      entryId: entry.id,
+      englishWord: entry.original_text,
+      prompt: entry.prompt,
+    });
+
+    if (result.data && result.data.status === 'completed' && result.data.imageUrl) {
+      updateEntry(entry.id, { 
+        imageUrl: result.data.imageUrl, 
+        imageStatus: 'completed',
+        qaScore: null, // Reset QA score for new image
+        imageGeneratedAt: result.data.generatedAt // Update generation timestamp
+      });
+      activityManager.addActivity('success', `Image regenerated for "${entry.original_text}"`, undefined, operationKey);
+      toast.success('Image regenerated successfully');
+    } else {
+      updateEntry(entry.id, { imageStatus: 'completed' }); // Revert to previous state
+      activityManager.addActivity('error', `Failed to regenerate image for "${entry.original_text}"`, result.error || 'Failed to regenerate image', operationKey);
+      toast.error(`Failed to regenerate: ${result.error || 'Unknown error'}`);
+    }
+  };
+
+  // Image download functionality has been removed
+
+  const handleExportAll = () => {
+    activityManager.addActivity('loading', 'Exporting data...');
+    
+    try {
+      const exportData = entries.map(entry => ({
+        ...entry,
+        imageStatus: undefined,
+        promptStatus: undefined,
+        replicateId: undefined,
+      }));
+      
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'language-cards-export.json';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      const stats = {
+        total: entries.length,
+        withPrompts: entries.filter(e => e.prompt).length,
+        withImages: entries.filter(e => e.imageUrl).length,
+      };
+      
+      activityManager.addActivity('success', 'Data exported successfully', 
+        `${stats.total} entries, ${stats.withPrompts} prompts, ${stats.withImages} images`);
+    } catch (error) {
+      activityManager.addActivity('error', 'Failed to export data');
+    }
+  };
+
+  if (allImages.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-gray-400">No images found</p>
+        <p className="text-sm mt-2 text-gray-500">
+          Go to the Data Table tab to generate images or add images to public/images/
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Filters */}
+      <div className="flex justify-between items-center">
+        <div className="flex gap-4 items-center">
+          <select
+            value={qaFilter}
+            onChange={(e) => setQaFilter(e.target.value as 'all' | 'good' | 'bad' | 'unrated')}
+            className="input-field w-40"
+          >
+            <option value="all">All Images</option>
+            <option value="good">✅ Good Images</option>
+            <option value="bad">❌ Bad Images</option>
+            <option value="unrated">⚪ Unrated</option>
+          </select>
+          
+          <span className="text-sm text-gray-400">
+            {filteredEntries.length} cards
+          </span>
+        </div>
+        
+        <button onClick={handleExportAll} className="btn-primary">
+          <Download className="h-4 w-4" />
+          [EXPORT]
+        </button>
+      </div>
+
+      {/* Gallery Grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-3">
+        {filteredEntries.map((entry) => {
+          return (
+            <div key={entry.id} className="bg-gray-900 border border-gray-700 rounded overflow-hidden group hover:border-gray-600 transition-colors">
+              {/* Compact Image Display */}
+              <div className="relative w-full aspect-square">
+                <img
+                  src={entry.imageUrl!}
+                  alt={entry.original_text}
+                  className="w-full h-full object-contain bg-gray-800"
+                />
+                
+                {/* QA Score Indicator */}
+                {entry.qaScore && (
+                  <div className="absolute top-1 right-1 w-5 h-5 rounded-full text-xs flex items-center justify-center bg-black/60">
+                    {entry.qaScore === 'good' ? '✅' : '❌'}
+                  </div>
+                )}
+              </div>
+              
+              {/* Compact Card Info */}
+              <div className="p-2 space-y-2">
+                {/* Word Info */}
+                <div>
+                  <h3 className="font-medium text-gray-100 text-sm truncate" title={entry.original_text}>
+                    {entry.original_text}
+                  </h3>
+                  <p className="text-xs text-gray-400 truncate" title={entry.translation_text}>
+                    {entry.translation_text}
+                  </p>
+                  <div className="text-xs text-gray-500">ID: {entry.id}</div>
+                </div>
+                
+                {/* Compact Buttons */}
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => handleQaScore(entry.id, 'good')}
+                    className={`flex-1 py-1 px-2 rounded text-xs transition-colors ${
+                      entry.qaScore === 'good'
+                        ? 'bg-green-600 text-white'
+                        : 'bg-gray-800 text-gray-300 hover:bg-green-600/20'
+                    }`}
+                    title="Mark as good"
+                  >
+                    ✅
+                  </button>
+                  <button
+                    onClick={() => handleQaScore(entry.id, 'bad')}
+                    className={`flex-1 py-1 px-2 rounded text-xs transition-colors ${
+                      entry.qaScore === 'bad'
+                        ? 'bg-red-600 text-white'
+                        : 'bg-gray-800 text-gray-300 hover:bg-red-600/20'
+                    }`}
+                    title="Mark as bad"
+                  >
+                    ❌
+                  </button>
+                  <button
+                    onClick={() => handleRegenerateImage(entry)}
+                    disabled={entry.imageStatus === 'processing'}
+                    className="flex-1 py-1 px-2 bg-blue-800 text-blue-300 hover:bg-blue-700 disabled:bg-gray-800 disabled:text-gray-500 rounded text-xs transition-colors"
+                    title="Regenerate image"
+                  >
+                    {entry.imageStatus === 'processing' ? (
+                      <div className="loading-spinner h-3 w-3 mx-auto" />
+                    ) : (
+                      <RefreshCw className="h-3 w-3 mx-auto" />
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="types/index.ts">
+export interface CategorizationResult {
+  primary_category: 'CONCRETE-VISUAL' | 'ABSTRACT-SYMBOLIC' | 'ACTION-VISUAL' | 'STATE-METAPHORICAL';
+  image_suitability: 'HIGH' | 'MEDIUM' | 'LOW';
+  word_type: 'noun' | 'verb' | 'adjective' | 'adverb' | 'phrase';
+  transformation_needed: boolean;
+  transformation_suggestion: string;
+  confidence: number;
+}
+
+export interface WordEntry {
+  id: number;
+  original_text: string;
+  translation_text: string;
+  level_id: number;
+  transcription: string;
+  prompt?: string;
+  imageUrl?: string;
+  imageStatus: 'none' | 'queued' | 'processing' | 'completed' | 'error';
+  promptStatus: 'none' | 'generating' | 'completed' | 'error';
+  replicateId?: string;
+  qaScore?: 'good' | 'bad' | null;
+  imageGeneratedAt?: string; // ISO timestamp when image was generated
+  categorization?: CategorizationResult;
+  categorizationStatus?: 'none' | 'processing' | 'completed' | 'error';
+}
+
+export interface AppState {
+  entries: WordEntry[];
+  currentPage: number;
+  itemsPerPage: number;
+  searchQuery: string;
+  levelFilter: number | null;
+  sortBy: string;
+  sortOrder: 'asc' | 'desc';
+  activeTab: 'table' | 'gallery';
+}
+
+export interface JSONImportData {
+  id: number;
+  original_text: string;
+  translation_text: string;
+  level_id: number;
+  transcription: string;
+}
+</file>
+
+<file path="CLAUDE.md">
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+SDXL Emoji Pipeline is a Next.js application that generates emoji-style images for language learning vocabulary cards. It processes JSON vocabulary data, uses AI to categorize words and generate prompts, then creates emoji-style images using SDXL-emoji model.
+
+## Commands
+
+```bash
+# Development
+npm run dev          # Start development server with Turbopack on http://localhost:3000
+
+# Production
+npm run build        # Build for production
+npm run start        # Start production server
+
+# Code Quality
+npm run lint         # Run ESLint
+```
+
+## Architecture
+
+- **Next.js 15.3.2 App Router**: All pages in `/app`, API routes in `/app/api`
+- **Database**: SQLite with Kysely ORM, stored at `/data/language-cards.db`
+- **State Management**: Zustand store in `/store/useAppStore.ts`
+- **AI Integration**:
+  - OpenRouter API (with Gemini model) for categorization
+  - Google Gemini AI for prompt generation
+  - Replicate API with SDXL-emoji model for image generation
+- **Image Storage**: Downloaded to `/public/images/` locally
+
+## Key Workflows
+
+1. **Word Categorization**: `/app/api/categorize-vocabulary` determines if words are suitable for image generation
+2. **Prompt Generation**: `/app/api/generate-prompts-batch` creates SDXL prompts (batch of 10)
+3. **Image Generation**: Queue system in `/lib/imageQueue.ts` handles sequential processing
+4. **Database Operations**: Repository pattern in `/lib/db/repository.ts`
+
+## Environment Variables
+
+Required in `.env.local`:
+```
+GEMINI_API_KEY=your_google_gemini_key
+REPLICATE_API_TOKEN=your_replicate_token
+OPENROUTER_API_KEY=your_openrouter_key  # Optional, defaults to provided key
+OPENROUTER_MODEL=google/gemini-2.5-flash-preview-05-20  # Optional
+```
+
+## Database Migrations
+
+Run migrations automatically on startup. New migrations go in `/lib/db/migrations/` following the naming pattern `XXX_description.ts`.
+
+## API Response Patterns
+
+All API routes return consistent JSON:
+- Success: `{ success: true, data: ... }`
+- Error: `{ success: false, error: "message" }`
+
+## Testing
+
+No test framework is currently configured. When adding tests, update this section with the test command.
+</file>
+
+<file path="next.config.ts">
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'replicate.delivery',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'pbxt.replicate.delivery',
+        pathname: '/**',
+      },
+    ],
+  },
+  // Disable the Next.js dev indicator completely
+  devIndicators: false,
+  // Fix file watching issues
+  webpack: (config, { dev, isServer }) => {
+    if (dev && !isServer) {
+      config.watchOptions = {
+        ...config.watchOptions,
+        ignored: [
+          '**/node_modules',
+          '**/.next',
+          '**/.git',
+          '**/public/images', // Also ignore generated images
+        ],
+      };
+    }
+    return config;
+  },
+  // Use polling for more stable file watching
+  webpackDevMiddleware: (config) => {
+    config.watchOptions = {
+      poll: 1000, // Check for changes every second
+      aggregateTimeout: 300, // Delay rebuild after change detection
+      ignored: /node_modules/,
+    };
+    return config;
+  },
+};
+
+export default nextConfig;
+</file>
+
+<file path="package.json">
+{
+  "name": "sdxl-emoji-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@tailwindcss/postcss": "^4.1.7",
+    "@tanstack/react-table": "^8.21.3",
+    "axios": "^1.9.0",
+    "better-sqlite3": "^11.10.0",
+    "kysely": "^0.28.2",
+    "lucide-react": "^0.511.0",
+    "next": "15.3.2",
+    "postcss": "^8.5.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-dropzone": "^14.3.8",
+    "react-hot-toast": "^2.5.2",
+    "replicate": "^1.0.1",
+    "tailwindcss": "^4.1.7",
+    "zustand": "^5.0.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9.27.0",
+    "eslint-config-next": "^15.3.3",
+    "typescript": "^5"
+  }
+}
+</file>
+
+<file path="components/DataTable.tsx">
+'use client';
+
+import { useState, useMemo, useEffect, useRef } from 'react';
+import {
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  getPaginationRowModel,
+  flexRender,
+  ColumnDef,
+  SortingState,
+} from '@tanstack/react-table';
+import { useAppStore } from '@/store/useAppStore';
+import { WordEntry } from '@/types';
+import { ChevronUp, ChevronDown, Search, Filter, Sparkles, ImageIcon, Edit2, Save, X } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { activityManager } from './ActivityLog';
+import {
+  generatePromptService,
+  queueImageService,
+  generatePromptsBatchService,
+  categorizeVocabularyService,
+} from '@/lib/apiClient';
+import { processBatch } from '@/lib/batchUtils';
+
+export default function DataTable() {
+  const {
+    entries,
+    updateEntry,
+    currentPage,
+    setCurrentPage,
+    itemsPerPage,
+    setItemsPerPage,
+    searchQuery,
+    setSearchQuery,
+    levelFilter,
+    setLevelFilter,
+    getFilteredEntries,
+  } = useAppStore();
+
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingPrompt, setEditingPrompt] = useState<string>('');
+  const [showBatchMenu, setShowBatchMenu] = useState(false);
+  const [showCategorizationMenu, setShowCategorizationMenu] = useState(false);
+  const [imageFilter, setImageFilter] = useState<'all' | 'with' | 'without' | 'bad'>('all');
+  const [promptFilter, setPromptFilter] = useState<'all' | 'with' | 'without'>('all');
+  const [isCategorizingAll, setIsCategorizingAll] = useState(false);
+  const batchMenuRef = useRef<HTMLDivElement>(null);
+  const categorizationMenuRef = useRef<HTMLDivElement>(null);
+
+  const filteredData = useMemo(() => {
+    let data = getFilteredEntries();
+    
+    // Apply prompt filter
+    if (promptFilter === 'with') {
+      data = data.filter(entry => entry.prompt && entry.prompt.trim() !== '');
+    } else if (promptFilter === 'without') {
+      data = data.filter(entry => !entry.prompt || entry.prompt.trim() === '');
+    }
+    
+    // Apply image filter
+    if (imageFilter === 'with') {
+      data = data.filter(entry => entry.imageUrl && entry.imageStatus === 'completed');
+    } else if (imageFilter === 'without') {
+      data = data.filter(entry => !entry.imageUrl || entry.imageStatus !== 'completed');
+    } else if (imageFilter === 'bad') {
+      data = data.filter(entry => entry.qaScore === 'bad');
+    }
+    
+    return data;
+  }, [getFilteredEntries, entries, imageFilter, promptFilter]);
+
+  // Click outside handler for menus
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (batchMenuRef.current && !batchMenuRef.current.contains(event.target as Node)) {
+        setShowBatchMenu(false);
+      }
+      if (categorizationMenuRef.current && !categorizationMenuRef.current.contains(event.target as Node)) {
+        setShowCategorizationMenu(false);
+      }
+    };
+
+    if (showBatchMenu || showCategorizationMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showBatchMenu, showCategorizationMenu]);
+
+  const handleGeneratePrompt = async (entry: WordEntry) => {
+    const operationKey = `prompt-${entry.id}`;
+    updateEntry(entry.id, { promptStatus: 'generating' });
+    activityManager.addActivity('loading', `Generating prompt for "${entry.original_text}"`, undefined, operationKey);
+    
+    const result = await generatePromptService({
+      english: entry.original_text,
+      russian: entry.translation_text,
+      transcription: entry.transcription,
+    });
+
+    if (result.data) {
+      updateEntry(entry.id, { prompt: result.data.prompt, promptStatus: 'completed' });
+      activityManager.addActivity('success', `Generated prompt for "${entry.original_text}"`, undefined, operationKey);
+    } else {
+      updateEntry(entry.id, { promptStatus: 'error' });
+      activityManager.addActivity('error', `Failed to generate prompt for "${entry.original_text}"`, result.error || 'Unknown error', operationKey);
+    }
+  };
+
+  const handleGenerateImage = async (entry: WordEntry) => {
+    if (!entry.prompt) {
+      toast.error(`No prompt available for "${entry.original_text}". Generate prompt first.`);
+      return;
+    }
+
+    const operationKey = `image-${entry.id}`;
+    updateEntry(entry.id, { imageStatus: 'queued' });
+    activityManager.addActivity('loading', `Queuing image for "${entry.original_text}"`, undefined, operationKey);
+    
+    const result = await queueImageService({
+      action: 'add',
+      entryId: entry.id,
+      englishWord: entry.original_text,
+      prompt: entry.prompt,
+    });
+
+    if (result.data && result.data.status === 'completed' && result.data.imageUrl) {
+      updateEntry(entry.id, { 
+        imageUrl: result.data.imageUrl, 
+        imageStatus: 'completed',
+        imageGeneratedAt: result.data.generatedAt 
+      });
+      activityManager.addActivity('success', `Image generated for "${entry.original_text}"`, undefined, operationKey);
+    } else {
+      updateEntry(entry.id, { imageStatus: 'error' });
+      activityManager.addActivity('error', `Failed to generate image for "${entry.original_text}"`, result.error || 'Failed to generate image', operationKey);
+    }
+  };
+
+  const handleEditPrompt = (entry: WordEntry) => {
+    setEditingId(entry.id);
+    setEditingPrompt(entry.prompt || '');
+  };
+
+  const handleSavePrompt = (id: number) => {
+    console.log('Saving prompt:', { id, prompt: editingPrompt });
+    updateEntry(id, { prompt: editingPrompt, promptStatus: 'completed' });
+    setEditingId(null);
+    setEditingPrompt('');
+    toast.success('Prompt saved');
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setEditingPrompt('');
+  };
+
+  const handleBatchGeneratePrompts = async (count: number) => {
+    // Get entries without prompts
+    const entriesWithoutPrompts = filteredData
+      .filter(entry => !entry.prompt || entry.prompt.trim() === '')
+      .slice(0, count);
+    
+    if (entriesWithoutPrompts.length === 0) {
+      toast.error('No entries without prompts found');
+      return;
+    }
+
+    const result = await processBatch({
+      itemsToProcess: entriesWithoutPrompts,
+      batchSize: entriesWithoutPrompts.length, // Process all at once for prompts
+      delayBetweenBatchesMs: 0,
+      operationName: 'Batch Prompt Generation',
+      getBatchPayload: (batch) => ({
+        entries: batch.map(entry => ({
+          id: entry.id,
+          english: entry.original_text,
+          russian: entry.translation_text,
+          transcription: entry.transcription,
+        })),
+      }),
+      batchApiService: generatePromptsBatchService,
+      getSuccessItems: (responseData) => responseData.prompts || [],
+      getErrorItems: (responseData) => [], // generatePromptsBatchService doesn't return separate errors array
+      processItemSuccess: (result, originalEntry) => {
+        updateEntry(result.id, {
+          prompt: result.prompt,
+          promptStatus: result.prompt === 'Failed to generate prompt' ? 'error' : 'completed',
+        });
+      },
+      processItemError: (error, originalEntry) => {
+        if (originalEntry) {
+          updateEntry(originalEntry.id, { promptStatus: 'error' });
+        }
+      },
+      onStartProcessingItem: (entry) => {
+        updateEntry(entry.id, { promptStatus: 'generating' });
+      },
+    });
+
+    toast.success(`Generated ${result.totalSuccess} prompts`);
+  };
+
+  const handleBatchCategorize = async (count: number) => {
+    // Get entries without categorization
+    const entriesWithoutCategorization = filteredData
+      .filter(entry => !entry.categorization || entry.categorizationStatus !== 'completed')
+      .slice(0, count);
+    
+    if (entriesWithoutCategorization.length === 0) {
+      toast.error('No entries without categorization found');
+      return;
+    }
+
+    const result = await processBatch({
+      itemsToProcess: entriesWithoutCategorization,
+      batchSize: 10, // API limit
+      delayBetweenBatchesMs: 0,
+      operationName: 'Batch Categorization (Selected)',
+      getBatchPayload: (batch) => ({
+        entries: batch.map(entry => ({
+          id: entry.id,
+          original_text: entry.original_text,
+          translation_text: entry.translation_text,
+          level_id: entry.level_id,
+        })),
+      }),
+      batchApiService: categorizeVocabularyService,
+      getSuccessItems: (responseData) => responseData.results || [],
+      getErrorItems: (responseData) => responseData.errors || [],
+      processItemSuccess: (result, originalEntry) => {
+        updateEntry(result.id, {
+          categorization: result.categorization,
+          categorizationStatus: 'completed',
+        });
+      },
+      processItemError: (error, originalEntry) => {
+        if (originalEntry) {
+          updateEntry(originalEntry.id, { categorizationStatus: 'error' });
+        }
+      },
+      onStartProcessingItem: (entry) => {
+        updateEntry(entry.id, { categorizationStatus: 'processing' });
+      },
+    });
+
+    toast.success(`Categorized ${result.totalSuccess} words`);
+  };
+
+  const handleCategorizeAllUncategorized = async () => {
+    // Get all entries without categorization from the entire store (not just filtered view)
+    const allUncategorizedEntries = useAppStore.getState().entries
+      .filter(entry => !entry.categorization || entry.categorizationStatus !== 'completed');
+    
+    if (allUncategorizedEntries.length === 0) {
+      toast.error('No entries without categorization found');
+      return;
+    }
+
+    // Prevent multiple simultaneous executions
+    if (isCategorizingAll) {
+      toast.error('Categorization already in progress');
+      return;
+    }
+
+    setIsCategorizingAll(true);
+
+    try {
+      const result = await processBatch({
+        itemsToProcess: allUncategorizedEntries,
+        batchSize: 10, // API limit
+        delayBetweenBatchesMs: 3000, // 3 seconds between batches
+        operationName: 'Categorize All Uncategorized',
+        getBatchPayload: (batch) => ({
+          entries: batch.map(entry => ({
+            id: entry.id,
+            original_text: entry.original_text,
+            translation_text: entry.translation_text,
+            level_id: entry.level_id,
+          })),
+        }),
+        batchApiService: categorizeVocabularyService,
+        getSuccessItems: (responseData) => responseData.results || [],
+        getErrorItems: (responseData) => responseData.errors || [],
+        processItemSuccess: (result, originalEntry) => {
+          updateEntry(result.id, {
+            categorization: result.categorization,
+            categorizationStatus: 'completed',
+          });
+        },
+        processItemError: (error, originalEntry) => {
+          if (originalEntry) {
+            updateEntry(originalEntry.id, { categorizationStatus: 'error' });
+          }
+        },
+        onStartProcessingItem: (entry) => {
+          updateEntry(entry.id, { categorizationStatus: 'processing' });
+        },
+      });
+
+      toast.success(`Categorized ${result.totalSuccess} words successfully`);
+    } catch (error) {
+      console.error('Categorize all error:', error);
+      toast.error('Failed to complete categorization');
+    } finally {
+      setIsCategorizingAll(false);
+    }
+  };
+
+  const columns = useMemo<ColumnDef<WordEntry>[]>(
+    () => [
+      {
+        accessorKey: 'id',
+        header: 'ID',
+        size: 60,
+      },
+      {
+        accessorKey: 'original_text',
+        header: 'English',
+        size: 200,
+      },
+      {
+        accessorKey: 'transcription',
+        header: 'Transcription',
+        size: 180,
+      },
+      {
+        accessorKey: 'translation_text',
+        header: 'Russian',
+        size: 200,
+      },
+      {
+        accessorKey: 'level_id',
+        header: 'Level',
+        size: 60,
+      },
+      {
+        id: 'category',
+        header: 'Category',
+        size: 140,
+        cell: ({ row }) => {
+          const entry = row.original;
+          if (!entry.categorization || entry.categorizationStatus !== 'completed') {
+            return <span className="text-gray-500 text-xs">-</span>;
+          }
+          
+          const categoryMap = {
+            'CONCRETE-VISUAL': { label: 'Concrete', color: 'text-green-500' },
+            'ABSTRACT-SYMBOLIC': { label: 'Abstract', color: 'text-blue-500' },
+            'ACTION-VISUAL': { label: 'Action', color: 'text-orange-500' },
+            'STATE-METAPHORICAL': { label: 'State', color: 'text-purple-500' }
+          };
+          
+          const category = categoryMap[entry.categorization.primary_category];
+          const suitability = entry.categorization.image_suitability;
+          
+          return (
+            <div className="flex flex-col gap-1">
+              <span className={`text-xs font-medium ${category.color}`}>
+                {category.label}
+              </span>
+              <span className={`text-xs ${
+                suitability === 'HIGH' ? 'text-green-400' : 
+                suitability === 'MEDIUM' ? 'text-yellow-400' : 
+                'text-red-400'
+              }`}>
+                {suitability}
+              </span>
+            </div>
+          );
+        },
+      },
+      {
+        id: 'hasImage',
+        header: 'Image',
+        size: 80,
+        cell: ({ row }) => {
+          const entry = row.original;
+          const hasImage = entry.imageUrl && entry.imageStatus === 'completed';
+          
+          return (
+            <div className="flex items-center justify-center">
+              {hasImage ? (
+                <div className="flex items-center gap-1 text-green-600">
+                  <ImageIcon className="h-4 w-4" />
+                  <span className="text-xs">✓</span>
+                </div>
+              ) : (
+                <span className="text-gray-500 text-xs">-</span>
+              )}
+            </div>
+          );
+        },
+      },
+      {
+        id: 'qaScore',
+        header: 'QA',
+        size: 60,
+        cell: ({ row }) => {
+          const entry = row.original;
+          
+          return (
+            <div className="flex items-center justify-center">
+              {entry.qaScore === 'good' ? (
+                <span className="text-green-600 text-sm">✅</span>
+              ) : entry.qaScore === 'bad' ? (
+                <span className="text-red-600 text-sm">❌</span>
+              ) : (
+                <span className="text-gray-500 text-xs">-</span>
+              )}
+            </div>
+          );
+        },
+      },
+      {
+        accessorKey: 'prompt',
+        header: 'Prompt',
+        size: 280,
+        cell: ({ row }) => {
+          const entry = row.original;
+          const isEditing = editingId === entry.id;
+
+          if (isEditing) {
+            return (
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={editingPrompt}
+                  onChange={(e) => setEditingPrompt(e.target.value)}
+                  className="input-field flex-1 text-xs"
+                  placeholder="Enter prompt..."
+                />
+                <button
+                  onClick={() => handleSavePrompt(entry.id)}
+                  className="p-1 rounded hover:bg-gray-800"
+                >
+                  <Save className="h-4 w-4 text-green-600" />
+                </button>
+                <button
+                  onClick={handleCancelEdit}
+                  className="p-1 rounded hover:bg-gray-800"
+                >
+                  <X className="h-4 w-4 text-red-600" />
+                </button>
+              </div>
+            );
+          }
+
+          return (
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-sm truncate block min-w-0 text-gray-300" title={entry.prompt || ''}>
+                {entry.prompt || <span className="text-gray-500">No prompt</span>}
+              </span>
+              <button
+                onClick={() => handleEditPrompt(entry)}
+                className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-gray-800 flex-shrink-0"
+              >
+                <Edit2 className="h-3 w-3 text-gray-400" />
+              </button>
+            </div>
+          );
+        },
+      },
+      {
+        id: 'actions',
+        header: 'Actions',
+        size: 260,
+        cell: ({ row }) => {
+          const entry = row.original;
+          
+          return (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleGeneratePrompt(entry)}
+                disabled={entry.promptStatus === 'generating'}
+                className="btn-secondary"
+              >
+                {entry.promptStatus === 'generating' ? (
+                  <div className="loading-spinner" />
+                ) : (
+                  <>
+                    <Sparkles className="h-3 w-3" />
+                    [PROMPT]
+                  </>
+                )}
+              </button>
+              
+              <button
+                onClick={() => handleGenerateImage(entry)}
+                disabled={!entry.prompt || (entry.imageStatus === 'processing' || entry.imageStatus === 'queued')}
+                className="btn-primary"
+              >
+                {entry.imageStatus === 'processing' || entry.imageStatus === 'queued' ? (
+                  <div className="loading-spinner" />
+                ) : (
+                  <>
+                    <ImageIcon className="h-3 w-3" />
+                    [IMAGE]
+                  </>
+                )}
+              </button>
+            </div>
+          );
+        },
+      },
+    ],
+    [editingId, editingPrompt]
+  );
+
+  const table = useReactTable({
+    data: filteredData,
+    columns,
+    state: {
+      sorting,
+      pagination: {
+        pageIndex: currentPage - 1,
+        pageSize: itemsPerPage,
+      },
+    },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    manualPagination: false,
+    pageCount: Math.ceil(filteredData.length / itemsPerPage),
+  });
+
+  return (
+    <div className="space-y-4">
+      {/* Filters */}
+      <div className="flex gap-4 items-center">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-500" />
+          <input
+            type="text"
+            placeholder="Search entries..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="input-field pl-9"
+          />
+        </div>
+        
+        <select
+          value={promptFilter}
+          onChange={(e) => setPromptFilter(e.target.value as 'all' | 'with' | 'without')}
+          className="input-field w-40"
+        >
+          <option value="all">All Prompts</option>
+          <option value="with">With Prompts</option>
+          <option value="without">Without Prompts</option>
+        </select>
+
+        <select
+          value={imageFilter}
+          onChange={(e) => setImageFilter(e.target.value as 'all' | 'with' | 'without' | 'bad')}
+          className="input-field w-40"
+        >
+          <option value="all">All Images</option>
+          <option value="with">With Images</option>
+          <option value="without">Without Images</option>
+          <option value="bad">❌ Bad Images</option>
+        </select>
+
+        {/* Batch Generate Button */}
+        <div className="relative" ref={batchMenuRef}>
+          <button
+            onClick={() => setShowBatchMenu(!showBatchMenu)}
+            className="btn-primary flex items-center gap-2"
+          >
+            <Sparkles className="h-4 w-4" />
+            Batch Generate
+          </button>
+          
+          {showBatchMenu && (
+            <div className="absolute right-0 mt-2 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
+              <div className="p-2">
+                <div className="text-xs text-gray-400 mb-2">Generate prompts for:</div>
+                {[10, 25, 50, 100, 200].map(count => (
+                  <button
+                    key={count}
+                    onClick={() => {
+                      handleBatchGeneratePrompts(count);
+                      setShowBatchMenu(false);
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
+                  >
+                    First {count} words
+                  </button>
+                ))}
+                <button
+                  onClick={() => {
+                    const allWithoutPrompts = filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length;
+                    handleBatchGeneratePrompts(allWithoutPrompts);
+                    setShowBatchMenu(false);
+                  }}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-2 pt-2"
+                >
+                  All without prompts ({filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length})
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Categorization Button */}
+        <div className="relative" ref={categorizationMenuRef}>
+          <button
+            onClick={() => setShowCategorizationMenu(!showCategorizationMenu)}
+            className="btn-primary flex items-center gap-2"
+            disabled={isCategorizingAll}
+          >
+            <Filter className="h-4 w-4" />
+            {isCategorizingAll ? 'Categorizing...' : 'Categorize (TIAC)'}
+          </button>
+          
+          {showCategorizationMenu && (
+            <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
+              <div className="p-2">
+                <div className="text-xs text-gray-400 mb-2">Categorize vocabulary for:</div>
+                {[2, 10, 25, 50, 100].map(count => (
+                  <button
+                    key={count}
+                    onClick={() => {
+                      handleBatchCategorize(count);
+                      setShowCategorizationMenu(false);
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
+                  >
+                    First {count} words
+                  </button>
+                ))}
+                <button
+                  onClick={() => {
+                    const allWithoutCategorization = filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length;
+                    handleBatchCategorize(allWithoutCategorization);
+                    setShowCategorizationMenu(false);
+                  }}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-2 pt-2"
+                >
+                  All uncategorized ({filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length})
+                </button>
+                <button
+                  onClick={() => {
+                    handleCategorizeAllUncategorized();
+                    setShowCategorizationMenu(false);
+                  }}
+                  disabled={isCategorizingAll}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-1 font-semibold text-blue-400"
+                >
+                  🚀 Categorize All Uncategorized ({filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length})
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto rounded-lg border border-gray-700">
+        <table className="w-full table-fixed">
+          <thead>
+            {table.getHeaderGroups().map((headerGroup) => (
+              <tr key={headerGroup.id} className="table-header">
+                {headerGroup.headers.map((header) => (
+                  <th
+                    key={header.id}
+                    className="px-4 py-3 text-left cursor-pointer hover:bg-gray-800"
+                    style={{ width: header.getSize() }}
+                    onClick={header.column.getToggleSortingHandler()}
+                  >
+                    <div className="flex items-center gap-1">
+                      {flexRender(header.column.columnDef.header, header.getContext())}
+                      {header.column.getIsSorted() && (
+                        header.column.getIsSorted() === 'asc' ? (
+                          <ChevronUp className="h-3 w-3" />
+                        ) : (
+                          <ChevronDown className="h-3 w-3" />
+                        )
+                      )}
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            ))}
+          </thead>
+          <tbody>
+            {table.getRowModel().rows.map((row) => (
+              <tr key={row.id} className="table-row group">
+                {row.getVisibleCells().map((cell) => (
+                  <td key={cell.id} className="px-4 py-3 text-sm" style={{ maxWidth: cell.column.getSize() }}>
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-gray-400">
+          Showing {Math.min((currentPage - 1) * itemsPerPage + 1, filteredData.length)} to {Math.min(currentPage * itemsPerPage, filteredData.length)} of {filteredData.length} entries
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => {
+              table.previousPage();
+              setCurrentPage(currentPage - 1);
+            }}
+            disabled={!table.getCanPreviousPage()}
+            className="btn-secondary"
+          >
+            ← PREV
+          </button>
+          <span className="flex items-center px-3 text-sm text-gray-400">
+            Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
+          </span>
+          <button
+            onClick={() => {
+              table.nextPage();
+              setCurrentPage(currentPage + 1);
+            }}
+            disabled={!table.getCanNextPage()}
+            className="btn-secondary"
+          >
+            NEXT →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="README.md">
+# SDXL Emoji Pipeline
+
+## tech
+
+Next.js / Gemini AI / Replicate SDXL-emoji
+
+### Как запустить проект
+
+1. **Установите зависимости:**
+```bash
+npm install
+```
+
+2. **Создайте файл `.env.local` с API ключами:**
+```env
+GEMINI_API_KEY=ваш_ключ_google_gemini
+REPLICATE_API_TOKEN=ваш_токен_replicate
+```
+
+3. **Запустите проект:**
+```bash
+npm run dev
+```
+
+4. **Откройте в браузере:** [http://localhost:3000](http://localhost:3000)
+
+### Как это работает
+
+1. **Загрузка данных**: Загрузите JSON файл со словами (формат: original_text, translation_text, transcription)
+2. **Категоризация**: Нажмите "Categorize All Uncategorized" - AI определит тип слова для оптимальной генерации
+3. **Генерация промптов**: Нажмите "Generate All Prompts" - AI создаст описания сцен в стиле эмодзи
+4. **Создание изображений**: Нажмите "Generate Image" - SDXL-emoji создаст уникальные картинки
+5. **Галерея**: Просмотрите результаты, оцените качество (✅/❌)
+6. **Экспорт**: Скачайте улучшенный датасет с промптами и картинками
+
+**Важно**: Все промпты автоматически начинаются с "TOK emoji of" - это активирует стиль эмодзи!
+
+### Экономия ресурсов
+
+Для тестирования используйте пакетную обработку по N записей вместо полной загрузки:
+- **Категоризация**: обрабатывает по 10 слов за раз
+- **Генерация промптов**: можно запускать для выбранного количества записей
+
+### Настройки
+
+**Модель Gemini**: `lib/gemini.ts` - строка с `model: 'gemini-2.5-flash-preview-05-20'`
+
+**Промпт категоризации**: `app/api/categorize-vocabulary/route.ts` - промпт с категориями CONCRETE-VISUAL, ABSTRACT-SYMBOLIC и т.д.
+
+**Шаблон промпта для изображений**: `lib/gemini.ts` - функция `generatePrompt()`, правила генерации объектов
+
+**Настройки SDXL-emoji**: `lib/replicateConfig.ts`
+- Модель: `fofr/sdxl-emoji`
+- Префикс промпта: `A TOK emoji of` (обязательно!)
+- Параметры: lora_scale: 0.6, guidance_scale: 7.5, num_inference_steps: 50
+</file>
+
+</files>

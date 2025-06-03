@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getGeminiModel, handleGeminiError } from '@/lib/gemini';
+import { callOpenRouter, handleOpenRouterError } from '@/lib/openrouter';
 import { languageCardRepository } from '@/lib/db/repository';
 import { CategorizationResult } from '@/types';
 
@@ -63,106 +63,34 @@ async function categorizeEntry(entry: CategorizeRequest['entries'][0]): Promise<
   const prompt = createCategorizationPrompt(entry);
   
   try {
-    // Check if API key exists
-    if (!process.env.GEMINI_API_KEY) {
-      throw new Error('GEMINI_API_KEY is not set in environment variables');
-    }
-    
-    const model = getGeminiModel();
-    
     console.log(`Sending categorization request for "${entry.original_text}"`);
-    console.log('Prompt being sent:', prompt);
-    console.log('Model configuration:', {
-      model: 'gemini-2.5-flash-preview-05-20',
-      temperature: 0.1,
-      maxOutputTokens: 8192,
-      responseMimeType: 'application/json',
-    });
+    console.log('Using OpenRouter with model:', process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-preview-05-20');
     
-    const response = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 8192,
-        responseMimeType: 'application/json',
+    const response = await callOpenRouter([
+      {
+        role: 'system',
+        content: 'You are a helpful assistant that categorizes vocabulary words for image generation suitability. Output only valid JSON. No explanations.'
       },
+      {
+        role: 'user',
+        content: prompt
+      }
+    ], {
+      temperature: 0.1,
+      max_tokens: 8192,
+      response_format: { type: 'json_object' }
     });
-
-    if (!response || !response.response) {
-      throw new Error('No response object from Gemini API');
-    }
-
-    // Check for token exhaustion with safe access
-    const firstCandidateFromInitialResponse = response.response?.candidates?.[0];
-    if (firstCandidateFromInitialResponse?.finishReason === 'MAX_TOKENS') {
-      console.warn(`[Categorization] MAX_TOKENS reached for entry ID: ${entry.id}. Using fallback. UsageMetadata:`, response.response?.usageMetadata);
-      return {
-        primary_category: 'ABSTRACT-SYMBOLIC',
-        image_suitability: 'LOW',
-        word_type: 'phrase',
-        transformation_needed: true,
-        transformation_suggestion: 'generic representation due to MAX_TOKENS',
-        confidence: 0.5
-      };
-    }
-
-    const result = response.response;
     
-    console.log('Full response object:', JSON.stringify(response, null, 2));
-    console.log('Response candidates:', JSON.stringify(result.candidates, null, 2));
-    console.log('Response usage metadata:', response.response?.usageMetadata);
+    console.log(`OpenRouter response for "${entry.original_text}":`, response);
     
-    if (!result.candidates || result.candidates.length === 0) {
-      const blockReason = result.promptFeedback?.blockReason;
-      const blockMessage = result.promptFeedback?.blockReasonMessage;
-      let noCandidatesErrorMsg = `[Categorization] No candidates in response from Gemini API for entry ID: ${entry.id}.`;
-      if (blockReason) {
-        noCandidatesErrorMsg += ` Block Reason: ${blockReason}.`;
-      }
-      if (blockMessage) {
-        noCandidatesErrorMsg += ` Message: ${blockMessage}.`;
-      }
-      console.error(noCandidatesErrorMsg, { entryId: entry.id, promptFeedback: result.promptFeedback, fullResult: result });
-      throw new Error(noCandidatesErrorMsg);
-    }
-    
-    const firstCandidateFromResult = result.candidates[0]; // This is safe after the check above
-    if (!firstCandidateFromResult.content ||
-        !firstCandidateFromResult.content.parts ||
-        firstCandidateFromResult.content.parts.length === 0 ||
-        !firstCandidateFromResult.content.parts[0].text // Explicitly check for text
-       ) {
-      const finishReason = firstCandidateFromResult.finishReason;
-      let errorMessage = `[Categorization] Gemini API returned no usable content or text part for candidate 0 for entry ID: ${entry.id}. Finish Reason: ${finishReason}.`;
-      // Log safety ratings if they exist and might be relevant
-      if (firstCandidateFromResult.safetyRatings && firstCandidateFromResult.safetyRatings.length > 0) {
-        errorMessage += ` Safety Ratings: ${JSON.stringify(firstCandidateFromResult.safetyRatings)}`;
-      }
-      console.error(errorMessage, { 
-        entryId: entry.id, 
-        finishReason, 
-        safetyRatings: firstCandidateFromResult.safetyRatings, 
-        candidateContent: firstCandidateFromResult.content 
-      });
-      throw new Error(errorMessage);
-    }
-    
-    const text = result.text().trim();
-    
-    console.log(`Gemini response for "${entry.original_text}":`, text);
-    
-    if (!text || text.length === 0) {
-      throw new Error('Empty response from Gemini API');
-    }
-    
-    // Try to extract JSON from the response (handle markdown code blocks)
-    let jsonText = text;
+    // Parse the response
+    let jsonText = response.trim();
     
     // Remove markdown code blocks if present
-    if (text.includes('```json')) {
-      jsonText = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    } else if (text.includes('```')) {
-      jsonText = text.replace(/```\s*/g, '').trim();
+    if (jsonText.includes('```json')) {
+      jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    } else if (jsonText.includes('```')) {
+      jsonText = jsonText.replace(/```\s*/g, '').trim();
     }
     
     // Extract JSON object if there's extra text
@@ -176,7 +104,7 @@ async function categorizeEntry(entry: CategorizeRequest['entries'][0]): Promise<
     } catch (parseError) {
       console.error('JSON parse error:', parseError);
       console.error('Failed to parse text:', jsonText);
-      console.error('Original response text:', text);
+      console.error('Original response text:', response);
       throw new Error(`JSON parse error: ${parseError instanceof Error ? parseError.message : 'Unknown parse error'}`);
     }
     console.log(`[Categorization] Successfully parsed categorization for entry ID ${entry.id}:`, categorization);
@@ -198,18 +126,9 @@ async function categorizeEntry(entry: CategorizeRequest['entries'][0]): Promise<
     return categorization;
   } catch (error) {
     console.error(`[Categorization] Failed to categorize entry ID: ${entry.id}, Word: "${entry.original_text}". Error:`, error);
-    console.error('Error type:', typeof error);
-    console.error('Error name:', error instanceof Error ? error.name : 'Not an Error instance');
-    console.error('Error message:', error instanceof Error ? error.message : String(error));
-    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
     
-    // Log additional error details if available
-    if (error && typeof error === 'object') {
-      console.error('Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-    }
-    
-    // Use the Gemini error handler for better error messages
-    const errorInfo = handleGeminiError(error);
+    // Use the OpenRouter error handler for better error messages
+    const errorInfo = handleOpenRouterError(error);
     console.error('Handled error info:', errorInfo);
     throw new Error(errorInfo.message);
   }

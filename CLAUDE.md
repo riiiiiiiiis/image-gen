@@ -26,7 +26,8 @@ npm run lint         # Run ESLint
 - **Database**: SQLite with Kysely ORM, stored at `/data/language-cards.db`
 - **State Management**: Zustand store in `/store/useAppStore.ts`
 - **AI Integration**:
-  - Google Gemini AI for categorization and prompt generation
+  - OpenRouter API (with Gemini model) for categorization
+  - Google Gemini AI for prompt generation
   - Replicate API with SDXL-emoji model for image generation
 - **Image Storage**: Downloaded to `/public/images/` locally
 
@@ -43,6 +44,8 @@ Required in `.env.local`:
 ```
 GEMINI_API_KEY=your_google_gemini_key
 REPLICATE_API_TOKEN=your_replicate_token
+OPENROUTER_API_KEY=your_openrouter_key  # Optional, defaults to provided key
+OPENROUTER_MODEL=google/gemini-2.5-flash-preview-05-20  # Optional
 ```
 
 ## Database Migrations
