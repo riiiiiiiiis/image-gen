@@ -2,85 +2,59 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Development Commands
+## Project Overview
 
-- `npm run dev` - Start development server with Turbopack
-- `npm run build` - Build production bundle
-- `npm run lint` - Run Next.js linting
+SDXL Emoji Pipeline is a Next.js application that generates emoji-style images for language learning vocabulary cards. It processes JSON vocabulary data, uses AI to categorize words and generate prompts, then creates emoji-style images using SDXL-emoji model.
 
-## Environment Setup
+## Commands
 
-Required environment variables in `.env.local`:
-- `GEMINI_API_KEY` - Google Gemini API key for prompt generation
-- `REPLICATE_API_TOKEN` - Replicate API token for image generation
+```bash
+# Development
+npm run dev          # Start development server with Turbopack on http://localhost:3000
 
-## Architecture Overview
+# Production
+npm run build        # Build for production
+npm run start        # Start production server
 
-This is a Next.js application that generates emoji-style images for language learning cards using AI. The app follows a client-server architecture with React frontend and API routes.
-
-### Core Data Flow
-1. **JSON Import**: Users upload JSON files with word pairs (English/Russian + transcription)
-2. **Prompt Generation**: Uses Gemini 2.5 Flash Preview to create scene descriptions
-3. **Image Generation**: Uses Replicate's SDXL-emoji model to create emoji-style images
-4. **State Management**: Zustand store with localStorage persistence
-
-### Key Components Architecture
-
-**State Management (`store/useAppStore.ts`)**:
-- Central Zustand store managing WordEntry objects
-- Persistent localStorage for data survival across sessions
-- Filtered data computation for table display
-
-**API Routes Architecture**:
-- `/api/generate-prompt` - Gemini integration with specific prompt engineering for visual scenes
-- `/api/generate-image` - Replicate integration using `replicate.run()` pattern with TOK emoji prefix
-
-**Activity Logging System (`components/ActivityLog.tsx`)**:
-- Global activity manager for real-time operation feedback
-- Operation tracking with unique keys (`prompt-${id}`, `image-${id}`)
-- Auto-cleanup of related messages on completion/error
-
-### Data Model
-
-Core entity is `WordEntry` with status tracking:
-```typescript
-interface WordEntry {
-  id: number;
-  original_text: string;      // English word
-  translation_text: string;   // Russian translation  
-  transcription: string;      // Phonetic notation
-  prompt?: string;            // Generated/manual scene description
-  imageUrl?: string;          // Generated emoji image
-  promptStatus: 'none' | 'generating' | 'completed' | 'error';
-  imageStatus: 'none' | 'queued' | 'processing' | 'completed' | 'error';
-}
+# Code Quality
+npm run lint         # Run ESLint
 ```
 
-### Design System
+## Architecture
 
-Uses monospace aesthetic with dark theme:
-- Font: JetBrains Mono with fallbacks
-- Custom CSS variables for dark grays (`--color-notion-gray-*`)
-- Terminal-style UI elements (`[PROMPT]`, `[IMAGE]`, `← PREV`)
-- ASCII art logo instead of traditional headers
+- **Next.js 15.3.2 App Router**: All pages in `/app`, API routes in `/app/api`
+- **Database**: SQLite with Kysely ORM, stored at `/data/language-cards.db`
+- **State Management**: Zustand store in `/store/useAppStore.ts`
+- **AI Integration**:
+  - Google Gemini AI for categorization and prompt generation
+  - Replicate API with SDXL-emoji model for image generation
+- **Image Storage**: Downloaded to `/public/images/` locally
 
-### External API Integrations
+## Key Workflows
 
-**Gemini API**:
-- Model: `gemini-2.5-flash-preview-05-20` (Latest Gemini 2.5 Flash Preview)
-- Specialized prompt engineering for emoji-suitable scene descriptions
-- Error handling for API key validation and rate limits
+1. **Word Categorization**: `/app/api/categorize-vocabulary` determines if words are suitable for image generation
+2. **Prompt Generation**: `/app/api/generate-prompts-batch` creates SDXL prompts (batch of 10)
+3. **Image Generation**: Queue system in `/lib/imageQueue.ts` handles sequential processing
+4. **Database Operations**: Repository pattern in `/lib/db/repository.ts`
 
-**Replicate API**:
-- Model: `fofr/sdxl-emoji:dee76b5afde21b0f01ed7925f0665b7e879c50ee718c5f78a9d38e04d523cc5e`
-- Uses `replicate.run()` pattern (not predictions API)
-- Prompt format: `"TOK emoji of ${user_prompt}"` (IMPORTANT: Must start with "TOK emoji of" - this is the key trigger for the model style)
-- Parameters: 1110x834, lora_scale 0.6, no watermark
+## Environment Variables
 
-### Table Implementation
+Required in `.env.local`:
+```
+GEMINI_API_KEY=your_google_gemini_key
+REPLICATE_API_TOKEN=your_replicate_token
+```
 
-Uses TanStack Table with:
-- 100 rows default pagination
-- Real-time editing of prompts with operation state tracking
-- Column sizing optimized for full-width display
-- Inline status indicators for async operations
+## Database Migrations
+
+Run migrations automatically on startup. New migrations go in `/lib/db/migrations/` following the naming pattern `XXX_description.ts`.
+
+## API Response Patterns
+
+All API routes return consistent JSON:
+- Success: `{ success: true, data: ... }`
+- Error: `{ success: false, error: "message" }`
+
+## Testing
+
+No test framework is currently configured. When adding tests, update this section with the test command.

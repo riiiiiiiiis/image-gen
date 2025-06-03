@@ -3,10 +3,10 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { WordEntry } from '@/types';
-import { Download, Filter, X, RefreshCw } from 'lucide-react';
-import Image from 'next/image';
+import { RefreshCw, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { activityManager } from './ActivityLog';
+import { queueImageService } from '@/lib/apiClient';
 
 export default function Gallery() {
   const { entries, updateEntry } = useAppStore();
@@ -90,66 +90,30 @@ export default function Gallery() {
     updateEntry(entry.id, { imageStatus: 'queued' });
     activityManager.addActivity('loading', `Queuing regeneration for "${entry.original_text}"`, undefined, operationKey);
     
-    try {
-      const response = await fetch('/api/queue-image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'add',
-          entryId: entry.id,
-          englishWord: entry.original_text,
-          prompt: entry.prompt,
-        }),
+    const result = await queueImageService({
+      action: 'add',
+      entryId: entry.id,
+      englishWord: entry.original_text,
+      prompt: entry.prompt,
+    });
+
+    if (result.data && result.data.status === 'completed' && result.data.imageUrl) {
+      updateEntry(entry.id, { 
+        imageUrl: result.data.imageUrl, 
+        imageStatus: 'completed',
+        qaScore: null, // Reset QA score for new image
+        imageGeneratedAt: result.data.generatedAt // Update generation timestamp
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || `HTTP ${response.status}`);
-      }
-
-      const { status, imageUrl, generatedAt } = await response.json();
-      
-      if (status === 'completed' && imageUrl) {
-        updateEntry(entry.id, { 
-          imageUrl, 
-          imageStatus: 'completed',
-          qaScore: null, // Reset QA score for new image
-          imageGeneratedAt: generatedAt // Update generation timestamp
-        });
-        activityManager.addActivity('success', `Image regenerated for "${entry.original_text}"`, undefined, operationKey);
-        toast.success('Image regenerated successfully');
-      } else {
-        throw new Error('Failed to regenerate image');
-      }
-    } catch (error) {
+      activityManager.addActivity('success', `Image regenerated for "${entry.original_text}"`, undefined, operationKey);
+      toast.success('Image regenerated successfully');
+    } else {
       updateEntry(entry.id, { imageStatus: 'completed' }); // Revert to previous state
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      activityManager.addActivity('error', `Failed to regenerate image for "${entry.original_text}"`, errorMessage, operationKey);
-      toast.error(`Failed to regenerate: ${errorMessage}`);
+      activityManager.addActivity('error', `Failed to regenerate image for "${entry.original_text}"`, result.error || 'Failed to regenerate image', operationKey);
+      toast.error(`Failed to regenerate: ${result.error || 'Unknown error'}`);
     }
   };
 
-  const handleDownload = async (entry: WordEntry) => {
-    if (!entry.imageUrl) return;
-    
-    activityManager.addActivity('loading', `Downloading image for "${entry.original_text}"`);
-    
-    try {
-      const response = await fetch(entry.imageUrl);
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${entry.original_text}-${entry.id}.png`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      activityManager.addActivity('success', `Downloaded image for "${entry.original_text}"`);
-    } catch (error) {
-      activityManager.addActivity('error', `Failed to download image for "${entry.original_text}"`);
-    }
-  };
+  // Image download functionality has been removed
 
   const handleExportAll = () => {
     activityManager.addActivity('loading', 'Exporting data...');

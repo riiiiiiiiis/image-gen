@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -15,6 +15,13 @@ import { WordEntry } from '@/types';
 import { ChevronUp, ChevronDown, Search, Filter, Sparkles, ImageIcon, Edit2, Save, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { activityManager } from './ActivityLog';
+import {
+  generatePromptService,
+  queueImageService,
+  generatePromptsBatchService,
+  categorizeVocabularyService,
+} from '@/lib/apiClient';
+import { processBatch } from '@/lib/batchUtils';
 
 export default function DataTable() {
   const {
@@ -38,6 +45,7 @@ export default function DataTable() {
   const [showCategorizationMenu, setShowCategorizationMenu] = useState(false);
   const [imageFilter, setImageFilter] = useState<'all' | 'with' | 'without' | 'bad'>('all');
   const [promptFilter, setPromptFilter] = useState<'all' | 'with' | 'without'>('all');
+  const [isCategorizingAll, setIsCategorizingAll] = useState(false);
   const batchMenuRef = useRef<HTMLDivElement>(null);
   const categorizationMenuRef = useRef<HTMLDivElement>(null);
 
@@ -88,29 +96,18 @@ export default function DataTable() {
     updateEntry(entry.id, { promptStatus: 'generating' });
     activityManager.addActivity('loading', `Generating prompt for "${entry.original_text}"`, undefined, operationKey);
     
-    try {
-      const response = await fetch('/api/generate-prompt', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          english: entry.original_text,
-          russian: entry.translation_text,
-          transcription: entry.transcription,
-        }),
-      });
+    const result = await generatePromptService({
+      english: entry.original_text,
+      russian: entry.translation_text,
+      transcription: entry.transcription,
+    });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || `HTTP ${response.status}`);
-      }
-
-      const { prompt } = await response.json();
-      updateEntry(entry.id, { prompt, promptStatus: 'completed' });
+    if (result.data) {
+      updateEntry(entry.id, { prompt: result.data.prompt, promptStatus: 'completed' });
       activityManager.addActivity('success', `Generated prompt for "${entry.original_text}"`, undefined, operationKey);
-    } catch (error) {
+    } else {
       updateEntry(entry.id, { promptStatus: 'error' });
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      activityManager.addActivity('error', `Failed to generate prompt for "${entry.original_text}"`, errorMessage, operationKey);
+      activityManager.addActivity('error', `Failed to generate prompt for "${entry.original_text}"`, result.error || 'Unknown error', operationKey);
     }
   };
 
@@ -124,39 +121,23 @@ export default function DataTable() {
     updateEntry(entry.id, { imageStatus: 'queued' });
     activityManager.addActivity('loading', `Queuing image for "${entry.original_text}"`, undefined, operationKey);
     
-    try {
-      const response = await fetch('/api/queue-image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'add',
-          entryId: entry.id,
-          englishWord: entry.original_text,
-          prompt: entry.prompt,
-        }),
+    const result = await queueImageService({
+      action: 'add',
+      entryId: entry.id,
+      englishWord: entry.original_text,
+      prompt: entry.prompt,
+    });
+
+    if (result.data && result.data.status === 'completed' && result.data.imageUrl) {
+      updateEntry(entry.id, { 
+        imageUrl: result.data.imageUrl, 
+        imageStatus: 'completed',
+        imageGeneratedAt: result.data.generatedAt 
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || `HTTP ${response.status}`);
-      }
-
-      const { status, imageUrl, generatedAt } = await response.json();
-      
-      if (status === 'completed' && imageUrl) {
-        updateEntry(entry.id, { 
-          imageUrl, 
-          imageStatus: 'completed',
-          imageGeneratedAt: generatedAt 
-        });
-        activityManager.addActivity('success', `Image generated for "${entry.original_text}"`, undefined, operationKey);
-      } else {
-        throw new Error('Failed to generate image');
-      }
-    } catch (error) {
+      activityManager.addActivity('success', `Image generated for "${entry.original_text}"`, undefined, operationKey);
+    } else {
       updateEntry(entry.id, { imageStatus: 'error' });
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      activityManager.addActivity('error', `Failed to generate image for "${entry.original_text}"`, errorMessage, operationKey);
+      activityManager.addActivity('error', `Failed to generate image for "${entry.original_text}"`, result.error || 'Failed to generate image', operationKey);
     }
   };
 
@@ -189,71 +170,39 @@ export default function DataTable() {
       return;
     }
 
-    const operationKey = `batch-prompts-${Date.now()}`;
-    activityManager.addActivity(
-      'loading', 
-      `Generating prompts for ${entriesWithoutPrompts.length} words...`, 
-      undefined, 
-      operationKey
-    );
-
-    // Update status for all entries being processed
-    entriesWithoutPrompts.forEach(entry => {
-      updateEntry(entry.id, { promptStatus: 'generating' });
-    });
-
-    try {
-      const response = await fetch('/api/generate-prompts-batch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          entries: entriesWithoutPrompts.map(entry => ({
-            id: entry.id,
-            english: entry.original_text,
-            russian: entry.translation_text,
-            transcription: entry.transcription,
-          })),
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || `HTTP ${response.status}`);
-      }
-
-      const { prompts } = await response.json();
-      
-      // Update all entries with their prompts
-      prompts.forEach((result: { id: number; prompt: string }) => {
+    const result = await processBatch({
+      itemsToProcess: entriesWithoutPrompts,
+      batchSize: entriesWithoutPrompts.length, // Process all at once for prompts
+      delayBetweenBatchesMs: 0,
+      operationName: 'Batch Prompt Generation',
+      getBatchPayload: (batch) => ({
+        entries: batch.map(entry => ({
+          id: entry.id,
+          english: entry.original_text,
+          russian: entry.translation_text,
+          transcription: entry.transcription,
+        })),
+      }),
+      batchApiService: generatePromptsBatchService,
+      getSuccessItems: (responseData) => responseData.prompts || [],
+      getErrorItems: (responseData) => [], // generatePromptsBatchService doesn't return separate errors array
+      processItemSuccess: (result, originalEntry) => {
         updateEntry(result.id, {
           prompt: result.prompt,
           promptStatus: result.prompt === 'Failed to generate prompt' ? 'error' : 'completed',
         });
-      });
+      },
+      processItemError: (error, originalEntry) => {
+        if (originalEntry) {
+          updateEntry(originalEntry.id, { promptStatus: 'error' });
+        }
+      },
+      onStartProcessingItem: (entry) => {
+        updateEntry(entry.id, { promptStatus: 'generating' });
+      },
+    });
 
-      const successCount = prompts.filter((p: any) => p.prompt !== 'Failed to generate prompt').length;
-      activityManager.addActivity(
-        'success',
-        `Generated ${successCount} prompts successfully`,
-        undefined,
-        operationKey
-      );
-      toast.success(`Generated ${successCount} prompts`);
-    } catch (error) {
-      // Reset status for all entries
-      entriesWithoutPrompts.forEach(entry => {
-        updateEntry(entry.id, { promptStatus: 'error' });
-      });
-      
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      activityManager.addActivity(
-        'error',
-        'Failed to generate batch prompts',
-        errorMessage,
-        operationKey
-      );
-      toast.error(`Failed to generate prompts: ${errorMessage}`);
-    }
+    toast.success(`Generated ${result.totalSuccess} prompts`);
   };
 
   const handleBatchCategorize = async (count: number) => {
@@ -262,83 +211,104 @@ export default function DataTable() {
       .filter(entry => !entry.categorization || entry.categorizationStatus !== 'completed')
       .slice(0, count);
     
-    console.log('Entries selected for categorization:', entriesWithoutCategorization);
-    
     if (entriesWithoutCategorization.length === 0) {
       toast.error('No entries without categorization found');
       return;
     }
 
-    const operationKey = `batch-categorize-${Date.now()}`;
-    activityManager.addActivity(
-      'loading', 
-      `Categorizing ${entriesWithoutCategorization.length} words...`, 
-      undefined, 
-      operationKey
-    );
-
-    // Process in batches of 10 (API limit)
-    const batchSize = 10;
-    let successCount = 0;
-    let errorCount = 0;
-
-    for (let i = 0; i < entriesWithoutCategorization.length; i += batchSize) {
-      const batch = entriesWithoutCategorization.slice(i, i + batchSize);
-      
-      try {
-        const response = await fetch('/api/categorize-vocabulary', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            entries: batch.map(entry => ({
-              id: entry.id,
-              original_text: entry.original_text,
-              translation_text: entry.translation_text,
-              level_id: entry.level_id,
-            })),
-          }),
+    const result = await processBatch({
+      itemsToProcess: entriesWithoutCategorization,
+      batchSize: 10, // API limit
+      delayBetweenBatchesMs: 0,
+      operationName: 'Batch Categorization (Selected)',
+      getBatchPayload: (batch) => ({
+        entries: batch.map(entry => ({
+          id: entry.id,
+          original_text: entry.original_text,
+          translation_text: entry.translation_text,
+          level_id: entry.level_id,
+        })),
+      }),
+      batchApiService: categorizeVocabularyService,
+      getSuccessItems: (responseData) => responseData.results || [],
+      getErrorItems: (responseData) => responseData.errors || [],
+      processItemSuccess: (result, originalEntry) => {
+        updateEntry(result.id, {
+          categorization: result.categorization,
+          categorizationStatus: 'completed',
         });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-          throw new Error(errorData.error || `HTTP ${response.status}`);
+      },
+      processItemError: (error, originalEntry) => {
+        if (originalEntry) {
+          updateEntry(originalEntry.id, { categorizationStatus: 'error' });
         }
+      },
+      onStartProcessingItem: (entry) => {
+        updateEntry(entry.id, { categorizationStatus: 'processing' });
+      },
+    });
 
-        const responseData = await response.json();
-        console.log('Categorization response:', responseData);
-        const { results, errors } = responseData;
-        
-        // Update successful categorizations
-        results.forEach((result: any) => {
-          const entry = batch.find(e => e.id === result.id);
-          if (entry) {
-            updateEntry(result.id, { 
-              categorization: result.categorization,
-              categorizationStatus: 'completed' 
-            });
-            successCount++;
-          }
-        });
-        
-        errorCount += errors.length;
-      } catch (error) {
-        // Mark batch as error
-        batch.forEach(entry => {
-          updateEntry(entry.id, { categorizationStatus: 'error' });
-        });
-        errorCount += batch.length;
-        console.error('Batch categorization error:', error);
-      }
+    toast.success(`Categorized ${result.totalSuccess} words`);
+  };
+
+  const handleCategorizeAllUncategorized = async () => {
+    // Get all entries without categorization from the entire store (not just filtered view)
+    const allUncategorizedEntries = useAppStore.getState().entries
+      .filter(entry => !entry.categorization || entry.categorizationStatus !== 'completed');
+    
+    if (allUncategorizedEntries.length === 0) {
+      toast.error('No entries without categorization found');
+      return;
     }
 
-    activityManager.addActivity(
-      successCount > 0 ? 'success' : 'error',
-      `Categorization complete`,
-      `${successCount} succeeded, ${errorCount} failed`,
-      operationKey
-    );
-    
-    toast.success(`Categorized ${successCount} words`);
+    // Prevent multiple simultaneous executions
+    if (isCategorizingAll) {
+      toast.error('Categorization already in progress');
+      return;
+    }
+
+    setIsCategorizingAll(true);
+
+    try {
+      const result = await processBatch({
+        itemsToProcess: allUncategorizedEntries,
+        batchSize: 10, // API limit
+        delayBetweenBatchesMs: 3000, // 3 seconds between batches
+        operationName: 'Categorize All Uncategorized',
+        getBatchPayload: (batch) => ({
+          entries: batch.map(entry => ({
+            id: entry.id,
+            original_text: entry.original_text,
+            translation_text: entry.translation_text,
+            level_id: entry.level_id,
+          })),
+        }),
+        batchApiService: categorizeVocabularyService,
+        getSuccessItems: (responseData) => responseData.results || [],
+        getErrorItems: (responseData) => responseData.errors || [],
+        processItemSuccess: (result, originalEntry) => {
+          updateEntry(result.id, {
+            categorization: result.categorization,
+            categorizationStatus: 'completed',
+          });
+        },
+        processItemError: (error, originalEntry) => {
+          if (originalEntry) {
+            updateEntry(originalEntry.id, { categorizationStatus: 'error' });
+          }
+        },
+        onStartProcessingItem: (entry) => {
+          updateEntry(entry.id, { categorizationStatus: 'processing' });
+        },
+      });
+
+      toast.success(`Categorized ${result.totalSuccess} words successfully`);
+    } catch (error) {
+      console.error('Categorize all error:', error);
+      toast.error('Failed to complete categorization');
+    } finally {
+      setIsCategorizingAll(false);
+    }
   };
 
   const columns = useMemo<ColumnDef<WordEntry>[]>(
@@ -641,13 +611,14 @@ export default function DataTable() {
           <button
             onClick={() => setShowCategorizationMenu(!showCategorizationMenu)}
             className="btn-primary flex items-center gap-2"
+            disabled={isCategorizingAll}
           >
             <Filter className="h-4 w-4" />
-            Categorize (TIAC)
+            {isCategorizingAll ? 'Categorizing...' : 'Categorize (TIAC)'}
           </button>
           
           {showCategorizationMenu && (
-            <div className="absolute right-0 mt-2 w-56 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
+            <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
               <div className="p-2">
                 <div className="text-xs text-gray-400 mb-2">Categorize vocabulary for:</div>
                 {[2, 10, 25, 50, 100].map(count => (
@@ -671,6 +642,16 @@ export default function DataTable() {
                   className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-2 pt-2"
                 >
                   All uncategorized ({filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length})
+                </button>
+                <button
+                  onClick={() => {
+                    handleCategorizeAllUncategorized();
+                    setShowCategorizationMenu(false);
+                  }}
+                  disabled={isCategorizingAll}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-1 font-semibold text-blue-400"
+                >
+                  🚀 Categorize All Uncategorized ({filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length})
                 </button>
               </div>
             </div>

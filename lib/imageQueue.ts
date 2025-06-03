@@ -230,16 +230,6 @@ class ImageGenerationQueue {
       isProcessing: this.processing,
     };
     
-    // Debug logging
-    console.log('Queue status requested:', status);
-    console.log('Queue contents:', this.queue.map(item => ({
-      id: item.id,
-      entryId: item.entryId,
-      word: item.englishWord,
-      status: item.status,
-      retries: item.retries
-    })));
-    
     return status;
   }
 
