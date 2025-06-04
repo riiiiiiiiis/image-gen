@@ -4,9 +4,9 @@ export const REPLICATE_CONFIG = {
   
   // Image generation parameters
   input: {
-    negative_prompt: "multiple objects, collection, many, crowd, group, realistic, photographic, 3d render, dark skin, black skin",
-    width: 1024,
-    height: 1024,
+    negative_prompt: "",
+    width: 1152,
+    height: 896,
     num_outputs: 1,
     num_inference_steps: 50,
     guidance_scale: 7.5,
