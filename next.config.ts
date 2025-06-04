@@ -17,9 +17,12 @@ const nextConfig: NextConfig = {
   },
   // Disable the Next.js dev indicator completely
   devIndicators: false,
-  // Fix file watching issues
+  // Fix file watching issues (only when not using Turbopack)
   webpack: (config, { dev, isServer }) => {
-    if (dev && !isServer) {
+    // Check if Turbopack is being used
+    const isTurbopack = process.env.TURBOPACK === '1' || process.argv.includes('--turbopack');
+    
+    if (dev && !isServer && !isTurbopack) {
       config.watchOptions = {
         poll: 1000, // Check for changes every second
         aggregateTimeout: 300, // Delay rebuild after change detection

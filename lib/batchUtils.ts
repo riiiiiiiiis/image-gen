@@ -9,7 +9,7 @@ export interface BatchProcessorConfig<TPayload, TResult, TError> {
   operationName: string;
   getBatchPayload: (batch: WordEntry[]) => TPayload;
   batchApiService: (payload: TPayload) => Promise<ApiResponse<any>>;
-  getSuccessItems: (responseData: any) => TResult[];
+  getSuccessItems: (responseData: any, batchItems: WordEntry[]) => TResult[];
   getErrorItems: (responseData: any) => TError[];
   processItemSuccess: (itemResult: TResult, originalEntry: WordEntry) => void;
   processItemError: (itemError: TError, originalEntry?: WordEntry) => void;
@@ -81,7 +81,7 @@ export async function processBatch<TPayload, TResult extends { id: number }, TEr
           totalFailed++;
         });
       } else if (response.data) {
-        const successItems = getSuccessItems(response.data);
+        const successItems = getSuccessItems(response.data, batch);
         const errorItems = getErrorItems(response.data);
 
         successItems.forEach(result => {

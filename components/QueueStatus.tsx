@@ -18,6 +18,7 @@ export default function QueueStatus() {
 
   const fetchStatus = async () => {
     try {
+      console.log('🔄 QueueStatus: Fetching queue status...');
       const response = await fetch('/api/queue-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -26,11 +27,14 @@ export default function QueueStatus() {
 
       if (response.ok) {
         const data = await response.json();
+        console.log('📊 QueueStatus: Received data:', data);
         setStatus(data);
         setIsVisible(data.total > 0);
+      } else {
+        console.log('⚠️ QueueStatus: Response not ok:', response.status);
       }
     } catch (error) {
-      console.error('Failed to fetch queue status:', error);
+      console.error('❌ QueueStatus: Failed to fetch queue status:', error);
     }
   };
 

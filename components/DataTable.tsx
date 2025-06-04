@@ -214,7 +214,7 @@ export default function DataTable() {
         })),
       }),
       batchApiService: generatePromptsBatchService,
-      getSuccessItems: (responseData) => responseData.prompts || [],
+      getSuccessItems: (responseData, batchItems) => responseData.prompts || [],
       getErrorItems: (responseData) => [], // generatePromptsBatchService doesn't return separate errors array
       processItemSuccess: (result, originalEntry) => {
         updateEntry(result.id, {
@@ -260,7 +260,7 @@ export default function DataTable() {
         })),
       }),
       batchApiService: categorizeVocabularyService,
-      getSuccessItems: (responseData) => responseData.results || [],
+      getSuccessItems: (responseData, batchItems) => responseData.results || [],
       getErrorItems: (responseData) => responseData.errors || [],
       processItemSuccess: (result, originalEntry) => {
         updateEntry(result.id, {
@@ -340,10 +340,10 @@ export default function DataTable() {
         }))
       }),
       batchApiService: batchGenerateImagesService,
-      getSuccessItems: (responseData) => {
+      getSuccessItems: (responseData, batchItems) => {
         if (!responseData.success) return [];
         const errorEntryIds = new Set(responseData.errors?.map((e: any) => e.entryId) || []);
-        return itemsToProcess.filter(item => !errorEntryIds.has(item.id)).map(item => ({ 
+        return batchItems.filter(item => !errorEntryIds.has(item.id)).map(item => ({ 
           id: item.id, 
           serverMessage: responseData.message 
         }));
