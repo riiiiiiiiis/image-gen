@@ -49,6 +49,7 @@ export default function DataTable() {
   const [suitabilityFilter, setSuitabilityFilter] = useState<'all' | 'HIGH' | 'MEDIUM' | 'LOW'>('all');
   const [isCategorizingAll, setIsCategorizingAll] = useState(false);
   const [customCategorizeCount, setCustomCategorizeCount] = useState<string>('10');
+  const [customBatchGenerateCount, setCustomBatchGenerateCount] = useState<string>('10');
   const batchMenuRef = useRef<HTMLDivElement>(null);
   const categorizationMenuRef = useRef<HTMLDivElement>(null);
 
@@ -284,6 +285,18 @@ export default function DataTable() {
     
     handleBatchCategorize(count);
     setShowCategorizationMenu(false);
+  };
+
+  const handleCustomBatchGeneratePrompts = async () => {
+    const count = parseInt(customBatchGenerateCount, 10);
+    
+    if (isNaN(count) || count <= 0) {
+      toast.error('Please enter a valid positive number for batch size.');
+      return;
+    }
+    
+    handleBatchGeneratePrompts(count);
+    setShowBatchMenu(false);
   };
 
   const handleCategorizeAllUncategorized = async () => {
@@ -632,28 +645,39 @@ export default function DataTable() {
           </button>
           
           {showBatchMenu && (
-            <div className="absolute right-0 mt-2 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
+            <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
               <div className="p-2">
-                <div className="text-xs text-gray-400 mb-2">Generate prompts for:</div>
-                {[10, 25, 50, 100, 200].map(count => (
+                <div className="mb-2">
+                  <div className="text-xs text-gray-400 mb-1">Generate prompts for:</div>
+                  <input
+                    type="number"
+                    value={customBatchGenerateCount}
+                    onChange={(e) => setCustomBatchGenerateCount(e.target.value)}
+                    placeholder="Number of words"
+                    className="input-field w-full text-sm px-3 py-2"
+                    min="1"
+                    aria-label="Number of prompts to generate"
+                  />
                   <button
-                    key={count}
-                    onClick={() => {
-                      handleBatchGeneratePrompts(count);
-                      setShowBatchMenu(false);
-                    }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
+                    onClick={handleCustomBatchGeneratePrompts}
+                    disabled={!customBatchGenerateCount || parseInt(customBatchGenerateCount, 10) <= 0}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-1"
                   >
-                    First {count} words
+                    Generate First {customBatchGenerateCount || 'N'} Prompts
                   </button>
-                ))}
+                </div>
+                <div className="border-t border-gray-700 my-2"></div>
                 <button
                   onClick={() => {
-                    const allWithoutPrompts = filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length;
-                    handleBatchGeneratePrompts(allWithoutPrompts);
+                    const allWithoutPromptsCount = filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length;
+                    if (allWithoutPromptsCount > 0) {
+                      handleBatchGeneratePrompts(allWithoutPromptsCount);
+                    } else {
+                      toast.error('No entries without prompts found');
+                    }
                     setShowBatchMenu(false);
                   }}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-2 pt-2"
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
                 >
                   All without prompts ({filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length})
                 </button>
