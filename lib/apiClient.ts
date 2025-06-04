@@ -48,6 +48,14 @@ export interface LanguageCardsPayload {
   word: string;
 }
 
+export interface BatchGenerateImagesPayload {
+  entries: Array<{
+    entryId: number;
+    prompt: string;
+    englishWord: string;
+  }>;
+}
+
 // Response types
 export interface GeneratePromptResponse {
   prompt: string;
@@ -87,6 +95,17 @@ export interface RegenerateImageResponse {
 export interface LanguageCardsResponse {
   cards: WordEntry[];
   totalWords: number;
+}
+
+export interface BatchGenerateImagesResponse {
+  success: boolean;
+  message: string;
+  queuedCount: number;
+  errorCount: number;
+  errors?: Array<{
+    entryId: number;
+    error: string;
+  }>;
 }
 
 // Generic API call utility
@@ -183,5 +202,14 @@ export async function fetchLanguageCardsService(
 ): Promise<ApiResponse<LanguageCardsResponse>> {
   return apiCall<LanguageCardsResponse>(`/api/language-cards?word=${encodeURIComponent(payload.word)}`, {
     method: 'GET',
+  });
+}
+
+export async function batchGenerateImagesService(
+  payload: BatchGenerateImagesPayload
+): Promise<ApiResponse<BatchGenerateImagesResponse>> {
+  return apiCall<BatchGenerateImagesResponse>('/api/generate-images-batch', {
+    method: 'POST',
+    body: payload,
   });
 }

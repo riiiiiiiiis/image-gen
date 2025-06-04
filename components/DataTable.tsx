@@ -20,6 +20,7 @@ import {
   queueImageService,
   generatePromptsBatchService,
   categorizeVocabularyService,
+  batchGenerateImagesService,
 } from '@/lib/apiClient';
 import { processBatch } from '@/lib/batchUtils';
 
@@ -43,14 +44,17 @@ export default function DataTable() {
   const [editingPrompt, setEditingPrompt] = useState<string>('');
   const [showBatchMenu, setShowBatchMenu] = useState(false);
   const [showCategorizationMenu, setShowCategorizationMenu] = useState(false);
+  const [showImageBatchMenu, setShowImageBatchMenu] = useState(false);
   const [imageFilter, setImageFilter] = useState<'all' | 'with' | 'without' | 'bad'>('all');
   const [promptFilter, setPromptFilter] = useState<'all' | 'with' | 'without'>('all');
   const [categorizationFilter, setCategorizationFilter] = useState<'all' | 'uncategorized' | 'categorized'>('all');
   const [suitabilityFilter, setSuitabilityFilter] = useState<'all' | 'HIGH' | 'MEDIUM' | 'LOW'>('all');
   const [customCategorizeCount, setCustomCategorizeCount] = useState<string>('10');
   const [customBatchGenerateCount, setCustomBatchGenerateCount] = useState<string>('10');
+  const [customImageBatchCount, setCustomImageBatchCount] = useState<string>('20');
   const batchMenuRef = useRef<HTMLDivElement>(null);
   const categorizationMenuRef = useRef<HTMLDivElement>(null);
+  const imageBatchMenuRef = useRef<HTMLDivElement>(null);
 
   const filteredData = useMemo(() => {
     let data = getFilteredEntries();
@@ -103,16 +107,19 @@ export default function DataTable() {
       if (categorizationMenuRef.current && !categorizationMenuRef.current.contains(event.target as Node)) {
         setShowCategorizationMenu(false);
       }
+      if (imageBatchMenuRef.current && !imageBatchMenuRef.current.contains(event.target as Node)) {
+        setShowImageBatchMenu(false);
+      }
     };
 
-    if (showBatchMenu || showCategorizationMenu) {
+    if (showBatchMenu || showCategorizationMenu || showImageBatchMenu) {
       document.addEventListener('mousedown', handleClickOutside);
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showBatchMenu, showCategorizationMenu]);
+  }, [showBatchMenu, showCategorizationMenu, showImageBatchMenu]);
 
   const handleGeneratePrompt = async (entry: WordEntry) => {
     const operationKey = `prompt-${entry.id}`;
@@ -296,6 +303,101 @@ export default function DataTable() {
     
     handleBatchGeneratePrompts(count);
     setShowBatchMenu(false);
+  };
+
+  const startBatchImageGeneration = async (input: number | WordEntry[]) => {
+    let itemsToProcess: WordEntry[];
+    
+    if (typeof input === 'number') {
+      // Filter for entries that are eligible for image generation
+      itemsToProcess = filteredData
+        .filter(entry => 
+          entry.prompt && 
+          entry.prompt.trim() !== '' && 
+          (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+        )
+        .slice(0, input);
+    } else {
+      // Input is already a pre-filtered array
+      itemsToProcess = input;
+    }
+
+    if (itemsToProcess.length === 0) {
+      toast.error('No eligible entries found for image generation.');
+      return;
+    }
+
+    const result = await processBatch({
+      itemsToProcess,
+      batchSize: 20, // Number of WordEntry items to group into a single call to /api/generate-images-batch
+      delayBetweenBatchesMs: 300,
+      operationName: 'Batch Image Enqueuing',
+      getBatchPayload: (batch) => ({
+        entries: batch.map(entry => ({
+          entryId: entry.id,
+          prompt: entry.prompt!,
+          englishWord: entry.original_text
+        }))
+      }),
+      batchApiService: batchGenerateImagesService,
+      getSuccessItems: (responseData) => {
+        if (!responseData.success) return [];
+        const errorEntryIds = new Set(responseData.errors?.map((e: any) => e.entryId) || []);
+        return itemsToProcess.filter(item => !errorEntryIds.has(item.id)).map(item => ({ 
+          id: item.id, 
+          serverMessage: responseData.message 
+        }));
+      },
+      getErrorItems: (responseData) => responseData.errors || [],
+      processItemSuccess: (result, originalEntry) => {
+        // Item was successfully queued by the server as part of a batch API call.
+        // Status already updated to 'queued' by onStartProcessingItem.
+        // activityManager.addActivity('info', `Image for "${originalEntry.original_text}" (ID: ${originalEntry.id}) added to generation queue.`);
+      },
+      processItemError: (itemError, originalEntry) => {
+        if (originalEntry) {
+          updateEntry(originalEntry.id, { imageStatus: 'error' });
+          activityManager.addActivity('error', `Failed to queue image for "${originalEntry.original_text}" (ID: ${originalEntry.id})`, itemError.error);
+        } else if ((itemError as any).entryId) {
+          activityManager.addActivity('error', `Failed to queue image for entry ID ${(itemError as any).entryId}`, itemError.error);
+        } else {
+          activityManager.addActivity('error', 'An item failed to queue for image generation', itemError.error);
+        }
+      },
+      onStartProcessingItem: (entry) => {
+        updateEntry(entry.id, { imageStatus: 'queued' });
+      },
+    });
+
+    activityManager.addActivity('info', `Batch image enqueuing process initiated. ${result.totalSuccess} items acknowledged by server, ${result.totalFailed} items had enqueuing issues. Monitor queue status for generation progress.`);
+  };
+
+  const handleCustomBatchGenerateImages = async () => {
+    const count = parseInt(customImageBatchCount, 10);
+    
+    if (isNaN(count) || count <= 0) {
+      toast.error('Please enter a valid positive number.');
+      return;
+    }
+    
+    await startBatchImageGeneration(count);
+    setShowImageBatchMenu(false);
+  };
+
+  const handleBatchGenerateAllEligibleImages = async () => {
+    const eligibleEntries = filteredData.filter(entry => 
+      entry.prompt && 
+      entry.prompt.trim() !== '' && 
+      (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+    );
+    
+    if (eligibleEntries.length === 0) {
+      toast.error('No eligible entries found for image generation.');
+      return;
+    }
+    
+    await startBatchImageGeneration(eligibleEntries);
+    setShowImageBatchMenu(false);
   };
 
   const columns = useMemo<ColumnDef<WordEntry>[]>(
@@ -666,6 +768,45 @@ export default function DataTable() {
                   All uncategorized ({filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length})
                 </button>
               </div>
+            </div>
+          )}
+        </div>
+
+        {/* Batch Images Button */}
+        <div className="relative" ref={imageBatchMenuRef}>
+          <button
+            onClick={() => setShowImageBatchMenu(!showImageBatchMenu)}
+            className="btn-primary flex items-center gap-2"
+          >
+            <ImageIcon className="h-4 w-4" />
+            Batch Images
+          </button>
+          
+          {showImageBatchMenu && (
+            <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10 p-2">
+              <div className="text-xs text-gray-400 mb-1">Generate images for first:</div>
+              <input
+                type="number"
+                value={customImageBatchCount}
+                onChange={(e) => setCustomImageBatchCount(e.target.value)}
+                placeholder="Number of entries"
+                className="input-field w-full text-sm px-3 py-2"
+                min="1"
+              />
+              <button
+                onClick={handleCustomBatchGenerateImages}
+                disabled={!customImageBatchCount || parseInt(customImageBatchCount, 10) <= 0}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-1"
+              >
+                Generate for {customImageBatchCount || 'N'} (Eligible)
+              </button>
+              <div className="border-t border-gray-700 my-2" />
+              <button
+                onClick={handleBatchGenerateAllEligibleImages}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
+              >
+                All eligible ({filteredData.filter(entry => entry.prompt && entry.prompt.trim() !== '' && (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')).length})
+              </button>
             </div>
           )}
         </div>
