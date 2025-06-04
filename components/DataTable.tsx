@@ -45,6 +45,7 @@ export default function DataTable() {
   const [showCategorizationMenu, setShowCategorizationMenu] = useState(false);
   const [imageFilter, setImageFilter] = useState<'all' | 'with' | 'without' | 'bad'>('all');
   const [promptFilter, setPromptFilter] = useState<'all' | 'with' | 'without'>('all');
+  const [categorizationFilter, setCategorizationFilter] = useState<'all' | 'uncategorized' | 'categorized'>('all');
   const [isCategorizingAll, setIsCategorizingAll] = useState(false);
   const batchMenuRef = useRef<HTMLDivElement>(null);
   const categorizationMenuRef = useRef<HTMLDivElement>(null);
@@ -68,8 +69,21 @@ export default function DataTable() {
       data = data.filter(entry => entry.qaScore === 'bad');
     }
     
+    // Apply categorization filter (NEW)
+    if (categorizationFilter === 'uncategorized') {
+      // Show entries that are not successfully categorized
+      data = data.filter(entry =>
+        !entry.categorization || entry.categorizationStatus !== 'completed'
+      );
+    } else if (categorizationFilter === 'categorized') {
+      // Show entries that are successfully categorized
+      data = data.filter(entry =>
+        entry.categorization && entry.categorizationStatus === 'completed'
+      );
+    }
+    
     return data;
-  }, [getFilteredEntries, entries, imageFilter, promptFilter]);
+  }, [getFilteredEntries, entries, imageFilter, promptFilter, categorizationFilter]);
 
   // Click outside handler for menus
   useEffect(() => {
@@ -563,6 +577,16 @@ export default function DataTable() {
           <option value="with">With Images</option>
           <option value="without">Without Images</option>
           <option value="bad">❌ Bad Images</option>
+        </select>
+
+        <select
+          value={categorizationFilter}
+          onChange={(e) => setCategorizationFilter(e.target.value as 'all' | 'uncategorized' | 'categorized')}
+          className="input-field w-48"
+        >
+          <option value="all">All Categories</option>
+          <option value="uncategorized">Uncategorized (Needs TIAC)</option>
+          <option value="categorized">Categorized (TIAC Done)</option>
         </select>
 
         {/* Batch Generate Button */}
