@@ -98,9 +98,11 @@ export async function processBatch<TPayload, TResult extends { id: number }, TEr
           totalFailed++;
           
           if (error.id && 'error' in error) {
+            const errorMessage = (error as any).error;
+            const entryText = originalEntry ? `Word "${originalEntry.original_text}" (ID: ${error.id})` : `Item ${error.id}`;
             activityManager.addActivity(
               `${operationKey}-item-${error.id}-error`,
-              `Item ${error.id} failed: ${(error as any).error}`,
+              `${entryText} failed: ${errorMessage}`,
               'error'
             );
           }

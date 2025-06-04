@@ -47,7 +47,6 @@ export default function DataTable() {
   const [promptFilter, setPromptFilter] = useState<'all' | 'with' | 'without'>('all');
   const [categorizationFilter, setCategorizationFilter] = useState<'all' | 'uncategorized' | 'categorized'>('all');
   const [suitabilityFilter, setSuitabilityFilter] = useState<'all' | 'HIGH' | 'MEDIUM' | 'LOW'>('all');
-  const [isCategorizingAll, setIsCategorizingAll] = useState(false);
   const [customCategorizeCount, setCustomCategorizeCount] = useState<string>('10');
   const [customBatchGenerateCount, setCustomBatchGenerateCount] = useState<string>('10');
   const batchMenuRef = useRef<HTMLDivElement>(null);
@@ -297,66 +296,6 @@ export default function DataTable() {
     
     handleBatchGeneratePrompts(count);
     setShowBatchMenu(false);
-  };
-
-  const handleCategorizeAllUncategorized = async () => {
-    // Get all entries without categorization from the entire store (not just filtered view)
-    const allUncategorizedEntries = useAppStore.getState().entries
-      .filter(entry => !entry.categorization || entry.categorizationStatus !== 'completed');
-    
-    if (allUncategorizedEntries.length === 0) {
-      toast.error('No entries without categorization found');
-      return;
-    }
-
-    // Prevent multiple simultaneous executions
-    if (isCategorizingAll) {
-      toast.error('Categorization already in progress');
-      return;
-    }
-
-    setIsCategorizingAll(true);
-
-    try {
-      const result = await processBatch({
-        itemsToProcess: allUncategorizedEntries,
-        batchSize: 10, // API limit
-        delayBetweenBatchesMs: 3000, // 3 seconds between batches
-        operationName: 'Categorize All Uncategorized',
-        getBatchPayload: (batch) => ({
-          entries: batch.map(entry => ({
-            id: entry.id,
-            original_text: entry.original_text,
-            translation_text: entry.translation_text,
-            level_id: entry.level_id,
-          })),
-        }),
-        batchApiService: categorizeVocabularyService,
-        getSuccessItems: (responseData) => responseData.results || [],
-        getErrorItems: (responseData) => responseData.errors || [],
-        processItemSuccess: (result, originalEntry) => {
-          updateEntry(result.id, {
-            categorization: result.categorization,
-            categorizationStatus: 'completed',
-          });
-        },
-        processItemError: (error, originalEntry) => {
-          if (originalEntry) {
-            updateEntry(originalEntry.id, { categorizationStatus: 'error' });
-          }
-        },
-        onStartProcessingItem: (entry) => {
-          updateEntry(entry.id, { categorizationStatus: 'processing' });
-        },
-      });
-
-      toast.success(`Categorized ${result.totalSuccess} words successfully`);
-    } catch (error) {
-      console.error('Categorize all error:', error);
-      toast.error('Failed to complete categorization');
-    } finally {
-      setIsCategorizingAll(false);
-    }
   };
 
   const columns = useMemo<ColumnDef<WordEntry>[]>(
@@ -691,10 +630,9 @@ export default function DataTable() {
           <button
             onClick={() => setShowCategorizationMenu(!showCategorizationMenu)}
             className="btn-primary flex items-center gap-2"
-            disabled={isCategorizingAll}
           >
             <Filter className="h-4 w-4" />
-            {isCategorizingAll ? 'Categorizing...' : 'Categorize (TIAC)'}
+            Categorize (TIAC)
           </button>
           
           {showCategorizationMenu && (
@@ -726,16 +664,6 @@ export default function DataTable() {
                   className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-2 pt-2"
                 >
                   All uncategorized ({filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length})
-                </button>
-                <button
-                  onClick={() => {
-                    handleCategorizeAllUncategorized();
-                    setShowCategorizationMenu(false);
-                  }}
-                  disabled={isCategorizingAll}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-1 font-semibold text-blue-400"
-                >
-                  🚀 Categorize All Uncategorized ({filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length})
                 </button>
               </div>
             </div>

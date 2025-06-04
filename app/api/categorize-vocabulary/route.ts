@@ -110,7 +110,7 @@ async function categorizeEntry(entry: CategorizeRequest['entries'][0]): Promise<
     console.log(`[Categorization] Successfully parsed categorization for entry ID ${entry.id}:`, categorization);
     
     // Validate the response structure
-    if (!categorization.primary_category || !categorization.image_suitability || !categorization.word_type) {
+    if (!categorization.primary_category || !categorization.image_suitability || categorization.word_type === undefined) {
       throw new Error('Invalid categorization response structure');
     }
     
@@ -202,7 +202,7 @@ export async function POST(request: NextRequest) {
         
         response.errors.push({
           id: entry.id,
-          error: error instanceof Error ? error.message : 'Unknown error',
+          error: `Word "${entry.original_text}": ${error instanceof Error ? error.message : 'Unknown error'}`,
         });
       }
     });

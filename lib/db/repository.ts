@@ -55,7 +55,8 @@ export class LanguageCardRepository {
       const cat = updates.categorization;
       dbUpdates.categorization_primary_category = cat.primary_category;
       dbUpdates.categorization_image_suitability = cat.image_suitability;
-      dbUpdates.categorization_word_type = cat.word_type;
+      dbUpdates.categorization_word_type = (cat.word_type === undefined || cat.word_type === null) ? null : cat.word_type;
+      // Ensure explicit NULL if word_type is undefined or null from sanitized object
       dbUpdates.categorization_transformation_needed = cat.transformation_needed ? 1 : 0;
       dbUpdates.categorization_transformation_suggestion = cat.transformation_suggestion;
       dbUpdates.categorization_confidence = cat.confidence;
@@ -198,7 +199,7 @@ export class LanguageCardRepository {
       entry.categorization = {
         primary_category: row.categorization_primary_category,
         image_suitability: row.categorization_image_suitability!,
-        word_type: row.categorization_word_type!,
+        word_type: row.categorization_word_type,
         transformation_needed: row.categorization_transformation_needed === 1,
         transformation_suggestion: row.categorization_transformation_suggestion || '',
         confidence: row.categorization_confidence || 0,

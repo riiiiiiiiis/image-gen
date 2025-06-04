@@ -1,7 +1,7 @@
 export interface CategorizationResult {
   primary_category: 'CONCRETE-VISUAL' | 'ABSTRACT-SYMBOLIC' | 'ACTION-VISUAL' | 'STATE-METAPHORICAL';
   image_suitability: 'HIGH' | 'MEDIUM' | 'LOW';
-  word_type: 'noun' | 'verb' | 'adjective' | 'adverb' | 'phrase';
+  word_type: 'noun' | 'verb' | 'adjective' | 'adverb' | 'phrase' | null;
   transformation_needed: boolean;
   transformation_suggestion: string;
   confidence: number;

@@ -21,7 +21,8 @@ const nextConfig: NextConfig = {
   webpack: (config, { dev, isServer }) => {
     if (dev && !isServer) {
       config.watchOptions = {
-        ...config.watchOptions,
+        poll: 1000, // Check for changes every second
+        aggregateTimeout: 300, // Delay rebuild after change detection
         ignored: [
           '**/node_modules',
           '**/.next',
@@ -30,15 +31,6 @@ const nextConfig: NextConfig = {
         ],
       };
     }
-    return config;
-  },
-  // Use polling for more stable file watching
-  webpackDevMiddleware: (config) => {
-    config.watchOptions = {
-      poll: 1000, // Check for changes every second
-      aggregateTimeout: 300, // Delay rebuild after change detection
-      ignored: /node_modules/,
-    };
     return config;
   },
 };
