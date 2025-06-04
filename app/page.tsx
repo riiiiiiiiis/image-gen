@@ -12,17 +12,9 @@ import { FileText, Image } from 'lucide-react';
 export default function Home() {
   const { entries, activeTab, setActiveTab, isInitialized } = useAppStore();
   const hasData = entries.length > 0;
-  
-  console.log('🏠 Page: Rendering with:', { 
-    entriesCount: entries.length, 
-    hasData, 
-    activeTab, 
-    isInitialized 
-  });
 
   // Show loading state if store isn't initialized yet
   if (!isInitialized) {
-    console.log('🔄 Page: Store not initialized, showing loading...');
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
         <div className="text-center">

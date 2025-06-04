@@ -137,27 +137,22 @@ export const useAppStore = create<AppStore>()((set, get) => ({
       },
       
       loadFromDatabase: async () => {
-        console.log('🔄 Store: Starting loadFromDatabase...');
         try {
           const response = await fetch('/api/language-cards');
-          console.log('📡 Store: API response status:', response.status);
           if (response.ok) {
             const entries = await response.json();
-            console.log('📊 Store: Loaded entries:', entries.length);
             if (entries.length > 0) {
               set({ entries, isInitialized: true });
             } else {
               set({ isInitialized: true });
             }
           } else {
-            console.log('⚠️ Store: API response not ok');
             set({ isInitialized: true });
           }
         } catch (error) {
-          console.error('❌ Store: Failed to load from database:', error);
+          console.error('Failed to load from database:', error);
           set({ isInitialized: true });
         }
-        console.log('✅ Store: loadFromDatabase completed');
       },
     }));
 
