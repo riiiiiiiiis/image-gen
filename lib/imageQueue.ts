@@ -1,5 +1,6 @@
 import Replicate from 'replicate';
 import { getReplicateModel, createReplicateInput } from './replicateConfig';
+import sharp from 'sharp';
 
 if (!process.env.REPLICATE_API_TOKEN) {
   console.error('REPLICATE_API_TOKEN is not set in environment variables');
@@ -192,6 +193,28 @@ class ImageGenerationQueue {
     const imageBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(imageBuffer);
     
+    // Resize image to exactly 1110x834px without distortion
+    const targetWidth = 1110;
+    const targetHeight = 834;
+    let bufferToSave = buffer; // Start with original buffer
+    
+    try {
+      console.log(`Resizing image ${entryId} from original (1152x896) to ${targetWidth}x${targetHeight}...`);
+      const resizedBuffer = await sharp(buffer)
+        .resize(targetWidth, targetHeight, {
+          fit: 'cover',           // Scale to cover target area, crop excess
+          position: 'center'      // Center crop any excess
+        })
+        .png()                    // Ensure PNG output format
+        .toBuffer();
+      
+      bufferToSave = resizedBuffer;
+      console.log(`Image ${entryId} successfully resized and cropped to ${targetWidth}x${targetHeight}.`);
+    } catch (resizeError) {
+      console.error(`Error resizing image ${entryId}:`, resizeError);
+      throw new Error(`Failed to resize image ${entryId}: ${resizeError instanceof Error ? resizeError.message : String(resizeError)}`);
+    }
+    
     // Create images directory if it doesn't exist
     const imagesDir = path.join(process.cwd(), 'public', 'images');
     if (!fs.existsSync(imagesDir)) {
@@ -202,8 +225,8 @@ class ImageGenerationQueue {
     const filename = `${entryId}.png`;
     const filepath = path.join(imagesDir, filename);
     
-    // Save file
-    fs.writeFileSync(filepath, buffer);
+    // Save resized file
+    fs.writeFileSync(filepath, bufferToSave);
     
     // Return local URL with cache buster
     const timestamp = Date.now();
