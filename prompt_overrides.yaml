@@ -1,0 +1,32 @@
+# Quick Fixes for Directional Words - Using original_text as key
+# These overrides replace abstract arrows with clearer person-based actions
+
+# Basic directional words
+above: "person pointing up"
+below: "person pointing down"
+left: "person pointing left"
+right: "person pointing right"
+up: "person looking up"
+down: "person looking down"
+
+# Positional relationships
+between: "person between objects"
+behind: "person stands behind object"
+before: "person stands before object"
+next: "person gestures next"
+beside: "person stands beside object"
+
+# Movement directions
+forward: "person walking forward"
+backward: "person walking backward"
+through: "person walking through"
+across: "person walking across"
+
+# Additional problematic directional terms
+under: "person pointing under"
+over: "person pointing over"
+inside: "person pointing inside"
+outside: "person pointing outside"
+around: "person walking around"
+towards: "person walking towards"
+away: "person walking away"
