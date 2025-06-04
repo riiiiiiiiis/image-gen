@@ -46,7 +46,9 @@ export default function DataTable() {
   const [imageFilter, setImageFilter] = useState<'all' | 'with' | 'without' | 'bad'>('all');
   const [promptFilter, setPromptFilter] = useState<'all' | 'with' | 'without'>('all');
   const [categorizationFilter, setCategorizationFilter] = useState<'all' | 'uncategorized' | 'categorized'>('all');
+  const [suitabilityFilter, setSuitabilityFilter] = useState<'all' | 'HIGH' | 'MEDIUM' | 'LOW'>('all');
   const [isCategorizingAll, setIsCategorizingAll] = useState(false);
+  const [customCategorizeCount, setCustomCategorizeCount] = useState<string>('10');
   const batchMenuRef = useRef<HTMLDivElement>(null);
   const categorizationMenuRef = useRef<HTMLDivElement>(null);
 
@@ -82,8 +84,15 @@ export default function DataTable() {
       );
     }
     
+    // Apply suitability filter
+    if (suitabilityFilter !== 'all') {
+      data = data.filter(entry =>
+        entry.categorization?.image_suitability === suitabilityFilter
+      );
+    }
+    
     return data;
-  }, [getFilteredEntries, entries, imageFilter, promptFilter, categorizationFilter]);
+  }, [getFilteredEntries, entries, imageFilter, promptFilter, categorizationFilter, suitabilityFilter]);
 
   // Click outside handler for menus
   useEffect(() => {
@@ -263,6 +272,18 @@ export default function DataTable() {
     });
 
     toast.success(`Categorized ${result.totalSuccess} words`);
+  };
+
+  const handleCustomBatchCategorize = async () => {
+    const count = parseInt(customCategorizeCount, 10);
+    
+    if (isNaN(count) || count <= 0) {
+      toast.error('Please enter a valid positive number for batch size.');
+      return;
+    }
+    
+    handleBatchCategorize(count);
+    setShowCategorizationMenu(false);
   };
 
   const handleCategorizeAllUncategorized = async () => {
@@ -589,6 +610,17 @@ export default function DataTable() {
           <option value="categorized">Categorized (TIAC Done)</option>
         </select>
 
+        <select
+          value={suitabilityFilter}
+          onChange={(e) => setSuitabilityFilter(e.target.value as 'all' | 'HIGH' | 'MEDIUM' | 'LOW')}
+          className="input-field w-48"
+        >
+          <option value="all">All Suitabilities</option>
+          <option value="HIGH">High Suitability</option>
+          <option value="MEDIUM">Medium Suitability</option>
+          <option value="LOW">Low Suitability</option>
+        </select>
+
         {/* Batch Generate Button */}
         <div className="relative" ref={batchMenuRef}>
           <button
@@ -645,18 +677,22 @@ export default function DataTable() {
             <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
               <div className="p-2">
                 <div className="text-xs text-gray-400 mb-2">Categorize vocabulary for:</div>
-                {[2, 10, 25, 50, 100].map(count => (
-                  <button
-                    key={count}
-                    onClick={() => {
-                      handleBatchCategorize(count);
-                      setShowCategorizationMenu(false);
-                    }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
-                  >
-                    First {count} words
-                  </button>
-                ))}
+                <input
+                  type="number"
+                  value={customCategorizeCount}
+                  onChange={(e) => setCustomCategorizeCount(e.target.value)}
+                  placeholder="Number of words"
+                  className="input-field w-full text-sm px-3 py-2 mb-2"
+                  min="1"
+                  aria-label="Number of words to categorize"
+                />
+                <button
+                  onClick={handleCustomBatchCategorize}
+                  disabled={!customCategorizeCount || parseInt(customCategorizeCount, 10) <= 0}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Categorize First {customCategorizeCount || 'N'} Words
+                </button>
                 <button
                   onClick={() => {
                     const allWithoutCategorization = filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length;
