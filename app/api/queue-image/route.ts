@@ -5,27 +5,22 @@ import { imageQueue } from '@/lib/imageQueue';
 const completionCallbacks = new Map<string, (result: any) => void>();
 const errorCallbacks = new Map<string, (error: string) => void>();
 
-// Override queue methods to handle notifications
-class ExtendedImageQueue extends (imageQueue.constructor as any) {
-  protected notifyCompletion(item: any, result: any) {
-    const callback = completionCallbacks.get(item.id);
-    if (callback) {
-      callback(result);
-      completionCallbacks.delete(item.id);
-    }
+// Set up notification handlers on the queue instance
+(imageQueue as any).notifyCompletion = function(item: any, result: any) {
+  const callback = completionCallbacks.get(item.id);
+  if (callback) {
+    callback(result);
+    completionCallbacks.delete(item.id);
   }
+};
 
-  protected notifyError(item: any, error: string) {
-    const errorCallback = errorCallbacks.get(item.id);
-    if (errorCallback) {
-      errorCallback(error);
-      errorCallbacks.delete(item.id);
-    }
+(imageQueue as any).notifyError = function(item: any, error: string) {
+  const errorCallback = errorCallbacks.get(item.id);
+  if (errorCallback) {
+    errorCallback(error);
+    errorCallbacks.delete(item.id);
   }
-}
-
-// Replace the queue instance methods
-Object.setPrototypeOf(imageQueue, ExtendedImageQueue.prototype);
+};
 
 export async function POST(request: Request) {
   try {

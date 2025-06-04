@@ -1,6 +1,11 @@
 import Replicate from 'replicate';
 import { getReplicateModel, createReplicateInput } from './replicateConfig';
 
+if (!process.env.REPLICATE_API_TOKEN) {
+  console.error('REPLICATE_API_TOKEN is not set in environment variables');
+  throw new Error('REPLICATE_API_TOKEN is required but not set');
+}
+
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN!,
 });

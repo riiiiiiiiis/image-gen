@@ -4,7 +4,7 @@ export const REPLICATE_CONFIG = {
   
   // Image generation parameters
   input: {
-    negative_prompt: "",
+    negative_prompt: "black skin, dark skin",
     width: 1152,
     height: 896,
     num_outputs: 1,

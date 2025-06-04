@@ -48,7 +48,10 @@ export async function POST(request: Request) {
       );
     }
 
-    const promptMap = new Map(prompts.map((p: { id: number; prompt: string }) => [p.id, p.prompt]));
+    const promptMap = new Map(prompts.map((p: { id: number; prompt?: string; single_object?: string }) => [
+      p.id, 
+      p.prompt || p.single_object || 'Failed to generate prompt'
+    ]));
 
     const results = entries.map(entry => ({
       id: entry.id,
