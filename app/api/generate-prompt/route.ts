@@ -35,7 +35,7 @@ export async function POST(request: Request) {
       const cleanedText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       const parsed = JSON.parse(cleanedText);
       finalPrompt = parsed.prompt || parsed.single_object || text;
-    } catch (parseError) {
+    } catch {
       // If parsing fails, use the original text
       console.log('Failed to parse AI response as JSON, using raw text:', text);
     }
