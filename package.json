@@ -13,6 +13,7 @@
     "@supabase/supabase-js": "^2.49.10",
     "@tailwindcss/postcss": "^4.1.7",
     "@tanstack/react-table": "^8.21.3",
+    "@vercel/blob": "^1.1.1",
     "js-yaml": "^4.1.0",
     "kysely": "^0.28.2",
     "lucide-react": "^0.511.0",
