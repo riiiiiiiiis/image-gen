@@ -13,6 +13,11 @@ const nextConfig: NextConfig = {
         hostname: 'pbxt.replicate.delivery',
         pathname: '/**',
       },
+      {
+        protocol: 'https',
+        hostname: '*.blob.vercel-storage.com',
+        pathname: '/**',
+      },
     ],
   },
   // Disable the Next.js dev indicator completely

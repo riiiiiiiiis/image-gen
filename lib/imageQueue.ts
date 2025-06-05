@@ -1,6 +1,7 @@
 import Replicate from 'replicate';
 import { getReplicateModel, createReplicateInput } from './replicateConfig';
-import { saveImageFromUrl } from './imageUtils';
+import { uploadBufferToBlob } from './vercelBlobUpload';
+import sharp from 'sharp';
 
 if (!process.env.REPLICATE_API_TOKEN) {
   console.error('REPLICATE_API_TOKEN is not set in environment variables');
@@ -158,21 +159,15 @@ class ImageGenerationQueue {
         throw new Error('Invalid output format');
       }
 
-      // Download and save image with resizing
-      const downloadResult = await saveImageFromUrl(imageUrl, item.entryId, {
-        resize: {
-          width: 1110,
-          height: 834,
-          fit: 'cover'
-        }
-      });
+      // Download and upload image with resizing to Vercel Blob
+      const uploadResult = await this.downloadAndUploadToBlob(imageUrl, item.entryId);
       
       item.status = 'completed';
       
       // Notify completion via callback or event
       this.notifyCompletion(item, {
-        imageUrl: downloadResult.localImageUrl,
-        originalUrl: downloadResult.originalUrl,
+        imageUrl: uploadResult.blobUrl,
+        originalUrl: uploadResult.originalUrl,
         generatedAt: new Date().toISOString(),
       });
 
@@ -185,6 +180,54 @@ class ImageGenerationQueue {
     }
   }
 
+
+  // Download and upload image to Vercel Blob with resizing
+  private async downloadAndUploadToBlob(imageUrl: string, entryId: number) {
+    console.log('Downloading and uploading image from:', imageUrl);
+    
+    // Fetch the image
+    const response = await fetch(imageUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.statusText}`);
+    }
+    
+    const imageBuffer = await response.arrayBuffer();
+    let buffer = Buffer.from(imageBuffer);
+    
+    // Apply resizing for batch operations
+    try {
+      const targetWidth = 1110;
+      const targetHeight = 834;
+      console.log(`Resizing image ${entryId} to ${targetWidth}x${targetHeight}...`);
+      
+      buffer = await sharp(buffer)
+        .resize(targetWidth, targetHeight, {
+          fit: 'cover',
+          position: 'center'
+        })
+        .png() // Ensure PNG output format
+        .toBuffer();
+      
+      console.log(`Image ${entryId} successfully resized to ${targetWidth}x${targetHeight}.`);
+    } catch (resizeError) {
+      console.error(`Error resizing image ${entryId}:`, resizeError);
+      throw new Error(
+        `Failed to resize image ${entryId}: ${
+          resizeError instanceof Error ? resizeError.message : String(resizeError)
+        }`
+      );
+    }
+    
+    // Upload to Vercel Blob
+    const blobFileName = `img/${entryId}.png`;
+    const blobUrl = await uploadBufferToBlob(blobFileName, buffer, 'image/png');
+    
+    return {
+      blobUrl,
+      originalUrl: imageUrl,
+      filename: `${entryId}.png`
+    };
+  }
 
   // Remove item from queue
   private removeFromQueue(queueId: string) {

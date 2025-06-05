@@ -1,30 +1,28 @@
-import Database from 'better-sqlite3';
-import { Kysely, SqliteDialect } from 'kysely';
+import { createPool } from '@vercel/postgres';
+import { Kysely, PostgresDialect } from 'kysely';
 import { Database as DatabaseType, DB } from './schema';
-import { createTables } from './migrations';
-import { runMigrations } from './runMigrations';
-import { DATABASE_FILE_PATH } from '../paths';
+// Migration imports removed - will be handled externally for Vercel deployment
 
 let db: DB | null = null;
 
 export function getDatabase(): DB {
   if (!db) {
-    const dbPath = process.env.DATABASE_PATH || DATABASE_FILE_PATH;
+    if (!process.env.DATABASE_URL) {
+      throw new Error('DATABASE_URL environment variable is not set');
+    }
     
-    const sqlite = new Database(dbPath);
-    sqlite.pragma('journal_mode = WAL');
+    const pool = createPool({
+      connectionString: process.env.DATABASE_URL,
+    });
     
     db = new Kysely<DatabaseType>({
-      dialect: new SqliteDialect({
-        database: sqlite,
+      dialect: new PostgresDialect({
+        pool,
       }),
     });
     
-    // Initialize tables if they don't exist
-    createTables(db);
-    
-    // Run migrations
-    runMigrations();
+    // Note: For Vercel deployment, migrations should be run externally
+    // using npx kysely migrate or similar command
   }
   
   return db;

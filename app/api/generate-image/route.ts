@@ -2,7 +2,7 @@ import Replicate from 'replicate';
 import { NextRequest, NextResponse } from 'next/server';
 import { getReplicateModel, createReplicateInput } from '@/lib/replicateConfig';
 import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
-import { saveImageFromUrl } from '@/lib/imageUtils';
+import { uploadBufferToBlob } from '@/lib/vercelBlobUpload';
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN!,
@@ -83,26 +83,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Download and save the image locally
+    // Upload the image to Vercel Blob
     try {
-      const result = await saveImageFromUrl(imageUrl, entryId);
+      // 1. Fetch the image content from the Replicate URL
+      const imageResponse = await fetch(imageUrl);
+      if (!imageResponse.ok) {
+        throw new Error(`Failed to fetch image from Replicate: ${imageResponse.statusText}`);
+      }
+      const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+      const contentType = imageResponse.headers.get('content-type') || 'image/png'; // Get content type
+
+      // 2. Define a filename for Vercel Blob
+      const blobFileName = `img/${entryId}.png`; // Or include a timestamp for cache-busting if needed at this level
+
+      // 3. Upload to Vercel Blob using the new helper
+      const blobUrl = await uploadBufferToBlob(blobFileName, imageBuffer, contentType);
+
       const generatedAt = new Date().toISOString();
-      
-      return NextResponse.json({ 
-        imageUrl: result.localImageUrl, // Return local path with cache-buster for the app to use
-        originalUrl: result.originalUrl, // Keep original URL as backup
-        localPath: result.localPath,
-        filename: result.filename,
+
+      return NextResponse.json({
+        imageUrl: blobUrl, // This is now the Vercel Blob URL
+        originalUrl: imageUrl, // Still useful to keep the Replicate URL if needed
         status: 'completed',
-        generatedAt: generatedAt, // Add timestamp for sorting
+        generatedAt: generatedAt,
       });
-    } catch (downloadError) {
-      console.error('Error downloading/saving image:', downloadError);
-      // If download fails, still return the original URL
+    } catch (uploadError) {
+      console.error('Error uploading image to Vercel Blob:', uploadError);
+      // If upload fails, still return the original URL
       return NextResponse.json({ 
         imageUrl,
         status: 'completed',
-        downloadError: 'Failed to save image locally, using remote URL',
+        uploadError: 'Failed to upload image to Vercel Blob, using remote URL',
       });
     }
   });
