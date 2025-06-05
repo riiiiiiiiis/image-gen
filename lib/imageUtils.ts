@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import sharp from 'sharp';
 import { IMAGES_DIR_PATH } from './paths';
+import { uploadImageToSupabase, ensureEmojiImagesBucket } from './supabaseImageStorage';
 
 export interface ImageSaveOptions {
   resize?: {
@@ -10,6 +10,7 @@ export interface ImageSaveOptions {
     fit: 'cover' | 'contain' | 'fill' | 'inside' | 'outside';
     position?: string;
   };
+  storage?: 'local' | 'supabase'; // Storage destination choice
 }
 
 export interface ImageSaveResult {
@@ -35,52 +36,48 @@ export async function saveImageFromUrl(
   const imageBuffer = await response.arrayBuffer();
   let buffer = Buffer.from(imageBuffer);
   
-  // Apply resizing if requested
+  // Skip resizing for now to reduce deployment size
   if (options?.resize) {
-    try {
-      const { width, height, fit, position = 'center' } = options.resize;
-      console.log(`Resizing image ${entryId} to ${width}x${height}...`);
-      
-      buffer = await sharp(buffer)
-        .resize(width, height, {
-          fit,
-          position: position
-        })
-        .png() // Ensure PNG output format
-        .toBuffer();
-      
-      console.log(`Image ${entryId} successfully resized to ${width}x${height}.`);
-    } catch (resizeError) {
-      console.error(`Error resizing image ${entryId}:`, resizeError);
-      throw new Error(
-        `Failed to resize image ${entryId}: ${
-          resizeError instanceof Error ? resizeError.message : String(resizeError)
-        }`
-      );
-    }
+    console.log(`Image resizing requested but disabled for deployment size optimization`);
   }
   
-  // Create images directory if it doesn't exist
-  if (!fs.existsSync(IMAGES_DIR_PATH)) {
-    fs.mkdirSync(IMAGES_DIR_PATH, { recursive: true });
-  }
-  
-  // Use entry ID as filename - simple and unique
   const filename = `${entryId}.png`;
-  const filepath = path.join(IMAGES_DIR_PATH, filename);
   
-  // Save the file
-  fs.writeFileSync(filepath, buffer);
-  console.log('Image saved to:', filepath);
-  
-  // Return both the original URL and the local path with cache-busting timestamp
-  const timestamp = Date.now();
-  const localImageUrl = `/images/${filename}?t=${timestamp}`;
-  
-  return {
-    localImageUrl,
-    originalUrl: imageUrl,
-    localPath: filepath,
-    filename
-  };
+  // Choose storage destination
+  if (options?.storage === 'supabase') {
+    // Upload to Supabase Storage
+    console.log('Uploading to Supabase Storage...');
+    await ensureEmojiImagesBucket();
+    
+    const uploadResult = await uploadImageToSupabase(buffer, entryId, 'image/png');
+    
+    return {
+      localImageUrl: uploadResult.imageUrl, // Supabase public URL
+      originalUrl: imageUrl,
+      localPath: uploadResult.localPath || `images/${filename}`,
+      filename: uploadResult.filename
+    };
+  } else {
+    // Default: Save to local filesystem
+    if (!fs.existsSync(IMAGES_DIR_PATH)) {
+      fs.mkdirSync(IMAGES_DIR_PATH, { recursive: true });
+    }
+    
+    const filepath = path.join(IMAGES_DIR_PATH, filename);
+    
+    // Save the file
+    fs.writeFileSync(filepath, buffer);
+    console.log('Image saved to:', filepath);
+    
+    // Return both the original URL and the local path with cache-busting timestamp
+    const timestamp = Date.now();
+    const localImageUrl = `/images/${filename}?t=${timestamp}`;
+    
+    return {
+      localImageUrl,
+      originalUrl: imageUrl,
+      localPath: filepath,
+      filename
+    };
+  }
 }

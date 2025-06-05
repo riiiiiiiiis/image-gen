@@ -1,7 +1,6 @@
 import Replicate from 'replicate';
 import { getReplicateModel, createReplicateInput } from './replicateConfig';
-import { uploadBufferToBlob } from './vercelBlobUpload';
-import sharp from 'sharp';
+import { uploadImageToSupabase, ensureEmojiImagesBucket } from './supabaseImageStorage';
 
 if (!process.env.REPLICATE_API_TOKEN) {
   console.error('REPLICATE_API_TOKEN is not set in environment variables');
@@ -170,14 +169,14 @@ class ImageGenerationQueue {
         throw new Error('Invalid output format');
       }
 
-      // Download and upload image with resizing to Vercel Blob
-      const uploadResult = await this.downloadAndUploadToBlob(imageUrl, item.entryId);
+      // Download and upload image with resizing to Supabase Storage
+      const uploadResult = await this.downloadAndUploadToSupabase(imageUrl, item.entryId);
       
       item.status = 'completed';
       
       // Notify completion via callback or event
       this.notifyCompletion(item, {
-        imageUrl: uploadResult.blobUrl,
+        imageUrl: uploadResult.imageUrl,
         originalUrl: uploadResult.originalUrl,
         generatedAt: new Date().toISOString(),
       });
@@ -192,9 +191,12 @@ class ImageGenerationQueue {
   }
 
 
-  // Download and upload image to Vercel Blob with resizing
-  private async downloadAndUploadToBlob(imageUrl: string, entryId: number) {
+  // Download and upload image to Supabase Storage with resizing
+  private async downloadAndUploadToSupabase(imageUrl: string, entryId: number) {
     console.log('Downloading and uploading image from:', imageUrl);
+    
+    // Ensure bucket exists
+    await ensureEmojiImagesBucket();
     
     // Fetch the image
     const response = await fetch(imageUrl);
@@ -205,38 +207,17 @@ class ImageGenerationQueue {
     const imageBuffer = await response.arrayBuffer();
     let buffer = Buffer.from(imageBuffer);
     
-    // Apply resizing for batch operations
-    try {
-      const targetWidth = 1110;
-      const targetHeight = 834;
-      console.log(`Resizing image ${entryId} to ${targetWidth}x${targetHeight}...`);
-      
-      buffer = await sharp(buffer)
-        .resize(targetWidth, targetHeight, {
-          fit: 'cover',
-          position: 'center'
-        })
-        .png() // Ensure PNG output format
-        .toBuffer();
-      
-      console.log(`Image ${entryId} successfully resized to ${targetWidth}x${targetHeight}.`);
-    } catch (resizeError) {
-      console.error(`Error resizing image ${entryId}:`, resizeError);
-      throw new Error(
-        `Failed to resize image ${entryId}: ${
-          resizeError instanceof Error ? resizeError.message : String(resizeError)
-        }`
-      );
-    }
+    // Skip resizing for now to reduce deployment size
+    // Images will be stored as-is from Replicate
+    console.log(`Uploading image ${entryId} without resizing...`);
     
-    // Upload to Vercel Blob
-    const blobFileName = `img/${entryId}.png`;
-    const blobUrl = await uploadBufferToBlob(blobFileName, buffer, 'image/png');
+    // Upload to Supabase Storage
+    const uploadResult = await uploadImageToSupabase(buffer, entryId, 'image/png');
     
     return {
-      blobUrl,
+      imageUrl: uploadResult.imageUrl,
       originalUrl: imageUrl,
-      filename: `${entryId}.png`
+      filename: uploadResult.filename
     };
   }
 

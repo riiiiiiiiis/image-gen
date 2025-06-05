@@ -31,9 +31,12 @@
 /data/*.db
 /data/*.db-journal
 /data/*.db-wal
+/data/*.db-shm
+/data/*.backup-*
 *.db
 *.db-journal
 *.db-wal
+*.db-shm
 
 # localStorage exports
 language-cards-export.json
@@ -55,3 +58,52 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# OS files
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# Build artifacts
+dist/
+*.log
+
+# Tool-generated files
+repomix-output.xml
+repomix-output.txt
+
+# Backup files
+*.backup
+*.bak
+*.old
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar
+
+# Nodemon
+nodemon.json
+
+# Cache directories
+.cache/
+.parcel-cache/

@@ -19,7 +19,6 @@ export {
   callOpenRouter,
   handleOpenRouterError,
   formatOpenRouterBatchPromptMessages,
-  OPENROUTER_API_KEY,
   OPENROUTER_BASE_URL,
   OPENROUTER_MODEL,
   BATCH_PROMPT_GENERATION_INSTRUCTIONS

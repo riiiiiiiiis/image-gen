@@ -2,7 +2,7 @@ import Replicate from 'replicate';
 import { NextRequest, NextResponse } from 'next/server';
 import { getReplicateModel, createReplicateInput } from '@/lib/replicateConfig';
 import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
-import { uploadBufferToBlob } from '@/lib/vercelBlobUpload';
+import { uploadImageToSupabase, ensureEmojiImagesBucket } from '@/lib/supabaseImageStorage';
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN!,
@@ -83,37 +83,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Upload the image to Vercel Blob
+    // Upload the image to Supabase Storage
     try {
+      // Ensure bucket exists
+      await ensureEmojiImagesBucket();
+      
       // 1. Fetch the image content from the Replicate URL
       const imageResponse = await fetch(imageUrl);
       if (!imageResponse.ok) {
         throw new Error(`Failed to fetch image from Replicate: ${imageResponse.statusText}`);
       }
       const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-      const contentType = imageResponse.headers.get('content-type') || 'image/png'; // Get content type
+      const contentType = imageResponse.headers.get('content-type') || 'image/png';
 
-      // 2. Define a filename for Vercel Blob
-      const blobFileName = `img/${entryId}.png`; // Or include a timestamp for cache-busting if needed at this level
-
-      // 3. Upload to Vercel Blob using the new helper
-      const blobUrl = await uploadBufferToBlob(blobFileName, imageBuffer, contentType);
+      // 2. Upload to Supabase Storage
+      const uploadResult = await uploadImageToSupabase(imageBuffer, entryId, contentType);
 
       const generatedAt = new Date().toISOString();
 
       return NextResponse.json({
-        imageUrl: blobUrl, // This is now the Vercel Blob URL
+        imageUrl: uploadResult.imageUrl, // This is now the Supabase public URL
         originalUrl: imageUrl, // Still useful to keep the Replicate URL if needed
         status: 'completed',
         generatedAt: generatedAt,
       });
     } catch (uploadError) {
-      console.error('Error uploading image to Vercel Blob:', uploadError);
+      console.error('Error uploading image to Supabase Storage:', uploadError);
       // If upload fails, still return the original URL
       return NextResponse.json({ 
         imageUrl,
         status: 'completed',
-        uploadError: 'Failed to upload image to Vercel Blob, using remote URL',
+        uploadError: 'Failed to upload image to Supabase Storage, using remote URL',
       });
     }
   });

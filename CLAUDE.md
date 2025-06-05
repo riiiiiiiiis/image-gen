@@ -37,6 +37,7 @@ npm run lint         # Run ESLint
 2. **Prompt Generation**: `/app/api/generate-prompts-batch` creates SDXL prompts (batch of 10)
 3. **Image Generation**: Queue system in `/lib/imageQueue.ts` handles sequential processing
 4. **Database Operations**: Repository pattern in `/lib/db/repository.ts`
+5. **Random Pending Word**: `/app/api/random-pending-word` returns random word with `image_status != 'completed'` as `{id, prompt}` for n8n integration
 
 ## Environment Variables
 
