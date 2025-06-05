@@ -1,30 +1,50 @@
 import Replicate from 'replicate';
-import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { NextRequest, NextResponse } from 'next/server';
 import { getReplicateModel, createReplicateInput } from '@/lib/replicateConfig';
+import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
+import { saveImageFromUrl } from '@/lib/imageUtils';
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN!,
 });
 
-export async function POST(request: Request) {
-  try {
-    const { prompt, entryId, englishWord } = await request.json();
-
-    if (!prompt || !entryId || !englishWord) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { prompt: string; entryId: number; englishWord: string }) => {
+    const validation = validateRequestBody(body, ['prompt', 'entryId', 'englishWord']);
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
 
-    const output = await replicate.run(
-      getReplicateModel(),
-      {
-        input: createReplicateInput(prompt),
+    const { prompt, entryId } = body;
+
+    let output;
+    try {
+      output = await replicate.run(
+        getReplicateModel(),
+        {
+          input: createReplicateInput(prompt),
+        }
+      );
+    } catch (error: any) {
+      console.error('Replicate API error:', error);
+      
+      // Handle specific Replicate API errors
+      if (error.message?.includes('Invalid token') || error.message?.includes('Unauthorized')) {
+        return NextResponse.json(
+          { error: 'Invalid API token. Please check your REPLICATE_API_TOKEN in .env.local' },
+          { status: 401 }
+        );
       }
-    );
+      
+      if (error.message?.includes('rate limit')) {
+        return NextResponse.json(
+          { error: 'Rate limit exceeded. Please try again later.' },
+          { status: 429 }
+        );
+      }
+      
+      throw error; // Re-throw to let handleApiRequest handle it
+    }
 
     console.log('Raw output from replicate.run:', output);
     console.log('Output type:', typeof output);
@@ -65,39 +85,14 @@ export async function POST(request: Request) {
 
     // Download and save the image locally
     try {
-      console.log('Downloading image from:', imageUrl);
-      const response = await fetch(imageUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch image: ${response.statusText}`);
-      }
-      
-      const imageBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(imageBuffer);
-      
-      // Create images directory if it doesn't exist
-      const imagesDir = path.join(process.cwd(), 'public', 'images');
-      if (!fs.existsSync(imagesDir)) {
-        fs.mkdirSync(imagesDir, { recursive: true });
-      }
-      
-      // Use entry ID as filename - simple and unique
-      const filename = `${entryId}.png`;
-      const filepath = path.join(imagesDir, filename);
-      
-      // Save the file
-      fs.writeFileSync(filepath, buffer);
-      console.log('Image saved to:', filepath);
-      
-      // Return both the original URL and the local path with cache-busting timestamp
-      const timestamp = Date.now();
-      const localImageUrl = `/images/${filename}?t=${timestamp}`;
+      const result = await saveImageFromUrl(imageUrl, entryId);
       const generatedAt = new Date().toISOString();
       
       return NextResponse.json({ 
-        imageUrl: localImageUrl, // Return local path with cache-buster for the app to use
-        originalUrl: imageUrl,    // Keep original URL as backup
-        localPath: filepath,
-        filename: filename,
+        imageUrl: result.localImageUrl, // Return local path with cache-buster for the app to use
+        originalUrl: result.originalUrl, // Keep original URL as backup
+        localPath: result.localPath,
+        filename: result.filename,
         status: 'completed',
         generatedAt: generatedAt, // Add timestamp for sorting
       });
@@ -110,27 +105,5 @@ export async function POST(request: Request) {
         downloadError: 'Failed to save image locally, using remote URL',
       });
     }
-  } catch (error: any) {
-    console.error('Error generating image:', error);
-    
-    // Handle specific Replicate API errors
-    if (error.message?.includes('Invalid token') || error.message?.includes('Unauthorized')) {
-      return NextResponse.json(
-        { error: 'Invalid API token. Please check your REPLICATE_API_TOKEN in .env.local' },
-        { status: 401 }
-      );
-    }
-    
-    if (error.message?.includes('rate limit')) {
-      return NextResponse.json(
-        { error: 'Rate limit exceeded. Please try again later.' },
-        { status: 429 }
-      );
-    }
-    
-    return NextResponse.json(
-      { error: error.message || 'Failed to generate image' },
-      { status: 500 }
-    );
-  }
+  });
 }

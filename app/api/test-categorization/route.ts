@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getGeminiModel } from '@/lib/gemini';
+import { handleApiRequest } from '@/lib/apiUtils';
 
-export async function GET() {
-  try {
+export async function GET(request: NextRequest) {
+  return handleApiRequest(request, async () => {
     const testWords = [
       { id: 1, original_text: 'a, an', translation_text: 'неопределенный артикль', level_id: 66 },
       { id: 2, original_text: 'about', translation_text: 'о, около, приблизительно, почти', level_id: 66 }
@@ -62,7 +63,5 @@ Return JSON:
     }
     
     return NextResponse.json({ results });
-  } catch (error) {
-    return NextResponse.json({ error: 'Test failed', details: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
-  }
+  }, { parseBody: false });
 }

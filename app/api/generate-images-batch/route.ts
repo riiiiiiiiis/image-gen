@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { imageQueue } from '@/lib/imageQueue';
+import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
 
 interface GenerateImageBatchRequestEntry {
   entryId: number;
@@ -7,24 +8,15 @@ interface GenerateImageBatchRequestEntry {
   englishWord: string;
 }
 
-export async function POST(request: Request) {
-  try {
-    const { entries }: { entries: GenerateImageBatchRequestEntry[] } = await request.json();
-
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { entries: GenerateImageBatchRequestEntry[] }) => {
     // Input validation
-    if (!entries || !Array.isArray(entries)) {
-      return NextResponse.json(
-        { error: 'Missing or invalid "entries" array.' },
-        { status: 400 }
-      );
+    const validation = validateRequestArray(body.entries, 'entries');
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
 
-    if (entries.length === 0) {
-      return NextResponse.json(
-        { error: '"entries" array cannot be empty.' },
-        { status: 400 }
-      );
-    }
+    const { entries } = body;
 
     // Initialize counters
     let successfullyQueuedCount = 0;
@@ -87,11 +79,5 @@ export async function POST(request: Request) {
       errors: itemErrors.length > 0 ? itemErrors : undefined
     });
 
-  } catch (error) {
-    console.error('Batch Generate Images API error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to process batch image generation request.' },
-      { status: 500 }
-    );
-  }
+  });
 }

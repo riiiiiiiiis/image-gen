@@ -1,6 +1,8 @@
 // Server-only OpenRouter integration
 // This file should never be imported client-side
 
+import { handleAiServiceError, AI_SERVICE_CONFIGS } from './aiUtils';
+
 export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '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';
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-preview-05-20';
@@ -109,33 +111,5 @@ Return valid JSON only, no markdown formatting.`;
 }
 
 export function handleOpenRouterError(error: unknown) {
-  console.error('OpenRouter API Error:', error);
-  
-  const errorMessage = error instanceof Error ? error.message : String(error);
-  
-  if (errorMessage.includes('Invalid API key') || errorMessage.includes('Unauthorized')) {
-    return {
-      message: 'Invalid API key. Please check your OPENROUTER_API_KEY.',
-      status: 401
-    };
-  }
-  
-  if (errorMessage.includes('Rate limit')) {
-    return {
-      message: 'Rate limit exceeded. Please try again later.',
-      status: 429
-    };
-  }
-  
-  if (errorMessage.includes('Model not found')) {
-    return {
-      message: 'Model not available. Please check the model name.',
-      status: 404
-    };
-  }
-  
-  return {
-    message: errorMessage || 'Failed to call OpenRouter API',
-    status: 500
-  };
+  return handleAiServiceError(error, AI_SERVICE_CONFIGS.openrouter);
 }

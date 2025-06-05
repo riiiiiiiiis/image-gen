@@ -1,17 +1,16 @@
-import { NextResponse } from 'next/server';
-import { getGeminiModel, formatSinglePrompt, handleGeminiError } from '@/lib/gemini';
+import { NextRequest, NextResponse } from 'next/server';
+import { getGeminiModel, formatSinglePrompt } from '@/lib/gemini';
 import { getPromptOverride } from '@/lib/promptOverrides';
+import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
 
-export async function POST(request: Request) {
-  try {
-    const { english, russian, transcription } = await request.json();
-
-    if (!english || !russian || !transcription) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { english: string; russian: string; transcription: string }) => {
+    const validation = validateRequestBody(body, ['english', 'russian', 'transcription']);
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
+
+    const { english, russian, transcription } = body;
 
     // Check for prompt override first
     const override = getPromptOverride(english);
@@ -41,11 +40,5 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({ prompt: finalPrompt });
-  } catch (error: any) {
-    const errorInfo = handleGeminiError(error);
-    return NextResponse.json(
-      { error: errorInfo.message },
-      { status: errorInfo.status }
-    );
-  }
+  });
 }

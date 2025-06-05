@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getGeminiModel, handleGeminiError } from '@/lib/gemini';
+import { getGeminiModel } from '@/lib/gemini';
+import { handleApiRequest } from '@/lib/apiUtils';
 
-export async function GET() {
-  try {
+export async function GET(request: NextRequest) {
+  return handleApiRequest(request, async () => {
     // Check if API key exists
     if (!process.env.GEMINI_API_KEY) {
       return NextResponse.json({ 
@@ -39,14 +40,5 @@ export async function GET() {
       response: text,
       apiKeySet: true,
     });
-  } catch (error) {
-    console.error('Gemini test error:', error);
-    const errorInfo = handleGeminiError(error);
-    
-    return NextResponse.json({
-      status: 'error',
-      error: errorInfo.message,
-      details: error instanceof Error ? error.message : 'Unknown error',
-    }, { status: errorInfo.status });
-  }
+  }, { parseBody: false });
 }

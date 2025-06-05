@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { imageQueue } from '@/lib/imageQueue';
+import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
 
 // In-memory storage for completion callbacks
 const completionCallbacks = new Map<string, (result: any) => void>();
@@ -22,9 +23,14 @@ const errorCallbacks = new Map<string, (error: string) => void>();
   }
 };
 
-export async function POST(request: Request) {
-  try {
-    const { action, ...data } = await request.json();
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { action: string; [key: string]: any }) => {
+    const validation = validateRequestBody(body, ['action']);
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
+    }
+
+    const { action, ...data } = body;
 
     switch (action) {
       case 'add':
@@ -39,13 +45,7 @@ export async function POST(request: Request) {
           { status: 400 }
         );
     }
-  } catch (error: any) {
-    console.error('Queue API error:', error);
-    return NextResponse.json(
-      { error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
+  });
 }
 
 async function handleAddToQueue(data: any) {

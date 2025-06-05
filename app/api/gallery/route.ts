@@ -1,16 +1,15 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { handleApiRequest } from '@/lib/apiUtils';
+import { GALLERY_JSON_PATH, IMAGES_DIR_PATH } from '@/lib/paths';
 
-const GALLERY_PATH = path.join(process.cwd(), 'data', 'gallery.json');
-const IMAGES_DIR = path.join(process.cwd(), 'public', 'images');
-
-export async function GET() {
-  try {
+export async function GET(request: NextRequest) {
+  return handleApiRequest(request, async () => {
     // Read gallery JSON
     let galleryData;
-    if (fs.existsSync(GALLERY_PATH)) {
-      const fileContent = fs.readFileSync(GALLERY_PATH, 'utf8');
+    if (fs.existsSync(GALLERY_JSON_PATH)) {
+      const fileContent = fs.readFileSync(GALLERY_JSON_PATH, 'utf8');
       galleryData = JSON.parse(fileContent);
     } else {
       // Auto-generate from existing images
@@ -18,14 +17,11 @@ export async function GET() {
     }
 
     return NextResponse.json(galleryData);
-  } catch (error) {
-    console.error('Error reading gallery:', error);
-    return NextResponse.json({ error: 'Failed to load gallery' }, { status: 500 });
-  }
+  }, { parseBody: false });
 }
 
 async function generateGalleryFromImages() {
-  const imageFiles = fs.readdirSync(IMAGES_DIR)
+  const imageFiles = fs.readdirSync(IMAGES_DIR_PATH)
     .filter(file => /\.(png|jpg|jpeg|webp)$/i.test(file))
     .map(filename => {
       const nameWithoutExt = path.parse(filename).name;
@@ -55,6 +51,6 @@ async function generateGalleryFromImages() {
   };
 
   // Save generated data
-  fs.writeFileSync(GALLERY_PATH, JSON.stringify(galleryData, null, 2));
+  fs.writeFileSync(GALLERY_JSON_PATH, JSON.stringify(galleryData, null, 2));
   return galleryData;
 }

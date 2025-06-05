@@ -3,13 +3,13 @@ import { Kysely, SqliteDialect } from 'kysely';
 import { Database as DatabaseType, DB } from './schema';
 import { createTables } from './migrations';
 import { runMigrations } from './runMigrations';
-import path from 'path';
+import { DATABASE_FILE_PATH } from '../paths';
 
 let db: DB | null = null;
 
 export function getDatabase(): DB {
   if (!db) {
-    const dbPath = process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'language-cards.db');
+    const dbPath = process.env.DATABASE_PATH || DATABASE_FILE_PATH;
     
     const sqlite = new Database(dbPath);
     sqlite.pragma('journal_mode = WAL');

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { callOpenRouter, handleOpenRouterError } from '@/lib/openrouter';
 import { languageCardRepository } from '@/lib/db/repository';
 import { CategorizationResult } from '@/types';
+import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
 
 export const maxDuration = 60; // 60 seconds timeout
 
@@ -135,16 +136,11 @@ async function categorizeEntry(entry: CategorizeRequest['entries'][0]): Promise<
 }
 
 export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json() as CategorizeRequest;
-    
+  return handleApiRequest(request, async (_req, body: CategorizeRequest) => {
     // Validate request
-    if (!body.entries || !Array.isArray(body.entries)) {
-      return NextResponse.json({ error: 'Invalid request: entries must be an array' }, { status: 400 });
-    }
-    
-    if (body.entries.length === 0) {
-      return NextResponse.json({ error: 'Invalid request: entries array is empty' }, { status: 400 });
+    const validation = validateRequestArray(body.entries, 'entries');
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
     
     if (body.entries.length > 10) {
@@ -217,18 +213,5 @@ export async function POST(request: NextRequest) {
     });
     
     return NextResponse.json(response);
-  } catch (error) {
-    console.error('=== CATEGORIZATION API ERROR ===');
-    console.error('Categorization API error:', error);
-    console.error('API Error details:', {
-      message: error instanceof Error ? error.message : String(error),
-      name: error instanceof Error ? error.name : 'Unknown',
-      stack: error instanceof Error ? error.stack : 'No stack',
-    });
-    console.error('=== END CATEGORIZATION API ERROR ===');
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to categorize vocabulary' },
-      { status: 500 }
-    );
-  }
+  });
 }

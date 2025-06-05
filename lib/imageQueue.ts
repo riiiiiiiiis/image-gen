@@ -1,6 +1,6 @@
 import Replicate from 'replicate';
 import { getReplicateModel, createReplicateInput } from './replicateConfig';
-import sharp from 'sharp';
+import { saveImageFromUrl } from './imageUtils';
 
 if (!process.env.REPLICATE_API_TOKEN) {
   console.error('REPLICATE_API_TOKEN is not set in environment variables');
@@ -158,15 +158,21 @@ class ImageGenerationQueue {
         throw new Error('Invalid output format');
       }
 
-      // Download and save image
-      const downloadResult = await this.downloadAndSaveImage(imageUrl, item.entryId);
+      // Download and save image with resizing
+      const downloadResult = await saveImageFromUrl(imageUrl, item.entryId, {
+        resize: {
+          width: 1110,
+          height: 834,
+          fit: 'cover'
+        }
+      });
       
       item.status = 'completed';
       
       // Notify completion via callback or event
       this.notifyCompletion(item, {
         imageUrl: downloadResult.localImageUrl,
-        originalUrl: imageUrl,
+        originalUrl: downloadResult.originalUrl,
         generatedAt: new Date().toISOString(),
       });
 
@@ -179,61 +185,6 @@ class ImageGenerationQueue {
     }
   }
 
-
-  // Download and save image locally
-  private async downloadAndSaveImage(imageUrl: string, entryId: number) {
-    const fs = require('fs');
-    const path = require('path');
-
-    const response = await fetch(imageUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.statusText}`);
-    }
-    
-    const imageBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(imageBuffer);
-    
-    // Resize image to exactly 1110x834px without distortion
-    const targetWidth = 1110;
-    const targetHeight = 834;
-    let bufferToSave = buffer; // Start with original buffer
-    
-    try {
-      console.log(`Resizing image ${entryId} from original (1152x896) to ${targetWidth}x${targetHeight}...`);
-      const resizedBuffer = await sharp(buffer)
-        .resize(targetWidth, targetHeight, {
-          fit: 'cover',           // Scale to cover target area, crop excess
-          position: 'center'      // Center crop any excess
-        })
-        .png()                    // Ensure PNG output format
-        .toBuffer();
-      
-      bufferToSave = resizedBuffer;
-      console.log(`Image ${entryId} successfully resized and cropped to ${targetWidth}x${targetHeight}.`);
-    } catch (resizeError) {
-      console.error(`Error resizing image ${entryId}:`, resizeError);
-      throw new Error(`Failed to resize image ${entryId}: ${resizeError instanceof Error ? resizeError.message : String(resizeError)}`);
-    }
-    
-    // Create images directory if it doesn't exist
-    const imagesDir = path.join(process.cwd(), 'public', 'images');
-    if (!fs.existsSync(imagesDir)) {
-      fs.mkdirSync(imagesDir, { recursive: true });
-    }
-    
-    // Use entry ID as filename - simple and unique
-    const filename = `${entryId}.png`;
-    const filepath = path.join(imagesDir, filename);
-    
-    // Save resized file
-    fs.writeFileSync(filepath, bufferToSave);
-    
-    // Return local URL with cache buster
-    const timestamp = Date.now();
-    const localImageUrl = `/images/${filename}?t=${timestamp}`;
-    
-    return { localImageUrl, filepath, filename };
-  }
 
   // Remove item from queue
   private removeFromQueue(queueId: string) {

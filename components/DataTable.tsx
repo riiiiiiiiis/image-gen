@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -15,6 +15,7 @@ import { WordEntry } from '@/types';
 import { ChevronUp, ChevronDown, Search, Filter, Sparkles, ImageIcon, Edit2, Save, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { activityManager } from './ActivityLog';
+import { BatchActionMenu } from './BatchActionMenu';
 import {
   generatePromptService,
   queueImageService,
@@ -31,20 +32,14 @@ export default function DataTable() {
     currentPage,
     setCurrentPage,
     itemsPerPage,
-    setItemsPerPage,
     searchQuery,
     setSearchQuery,
-    levelFilter,
-    setLevelFilter,
     getFilteredEntries,
   } = useAppStore();
 
   const [sorting, setSorting] = useState<SortingState>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<string>('');
-  const [showBatchMenu, setShowBatchMenu] = useState(false);
-  const [showCategorizationMenu, setShowCategorizationMenu] = useState(false);
-  const [showImageBatchMenu, setShowImageBatchMenu] = useState(false);
   const [imageFilter, setImageFilter] = useState<'all' | 'with' | 'without' | 'bad'>('all');
   const [promptFilter, setPromptFilter] = useState<'all' | 'with' | 'without'>('all');
   const [categorizationFilter, setCategorizationFilter] = useState<'all' | 'uncategorized' | 'categorized'>('all');
@@ -52,9 +47,6 @@ export default function DataTable() {
   const [customCategorizeCount, setCustomCategorizeCount] = useState<string>('10');
   const [customBatchGenerateCount, setCustomBatchGenerateCount] = useState<string>('10');
   const [customImageBatchCount, setCustomImageBatchCount] = useState<string>('20');
-  const batchMenuRef = useRef<HTMLDivElement>(null);
-  const categorizationMenuRef = useRef<HTMLDivElement>(null);
-  const imageBatchMenuRef = useRef<HTMLDivElement>(null);
 
   const filteredData = useMemo(() => {
     let data = getFilteredEntries();
@@ -98,28 +90,6 @@ export default function DataTable() {
     return data;
   }, [getFilteredEntries, entries, imageFilter, promptFilter, categorizationFilter, suitabilityFilter]);
 
-  // Click outside handler for menus
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (batchMenuRef.current && !batchMenuRef.current.contains(event.target as Node)) {
-        setShowBatchMenu(false);
-      }
-      if (categorizationMenuRef.current && !categorizationMenuRef.current.contains(event.target as Node)) {
-        setShowCategorizationMenu(false);
-      }
-      if (imageBatchMenuRef.current && !imageBatchMenuRef.current.contains(event.target as Node)) {
-        setShowImageBatchMenu(false);
-      }
-    };
-
-    if (showBatchMenu || showCategorizationMenu || showImageBatchMenu) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showBatchMenu, showCategorizationMenu, showImageBatchMenu]);
 
   const handleGeneratePrompt = async (entry: WordEntry) => {
     const operationKey = `prompt-${entry.id}`;
@@ -281,39 +251,25 @@ export default function DataTable() {
     toast.success(`Categorized ${result.totalSuccess} words`);
   };
 
-  const handleCustomBatchCategorize = async () => {
-    const count = parseInt(customCategorizeCount, 10);
-    
-    if (isNaN(count) || count <= 0) {
-      toast.error('Please enter a valid positive number for batch size.');
-      return;
-    }
-    
+  const handleCustomBatchCategorize = async (count: number) => {
     handleBatchCategorize(count);
-    setShowCategorizationMenu(false);
   };
 
-  const handleCustomBatchGeneratePrompts = async () => {
-    const count = parseInt(customBatchGenerateCount, 10);
-    
-    if (isNaN(count) || count <= 0) {
-      toast.error('Please enter a valid positive number for batch size.');
-      return;
-    }
-    
+  const handleCustomBatchGeneratePrompts = async (count: number) => {
     handleBatchGeneratePrompts(count);
-    setShowBatchMenu(false);
   };
 
   const startBatchImageGeneration = async (input: number | WordEntry[]) => {
     let itemsToProcess: WordEntry[];
     
     if (typeof input === 'number') {
-      // Filter for entries that are eligible for image generation
+      // Filter for entries that are eligible for image generation, excluding already queued/processing items
       itemsToProcess = filteredData
         .filter(entry => 
           entry.prompt && 
           entry.prompt.trim() !== '' && 
+          entry.imageStatus !== 'queued' && 
+          entry.imageStatus !== 'processing' && 
           (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
         )
         .slice(0, input);
@@ -372,22 +328,31 @@ export default function DataTable() {
     activityManager.addActivity('info', `Batch image enqueuing process initiated. ${result.totalSuccess} items acknowledged by server, ${result.totalFailed} items had enqueuing issues. Monitor queue status for generation progress.`);
   };
 
-  const handleCustomBatchGenerateImages = async () => {
-    const count = parseInt(customImageBatchCount, 10);
+  const handleCustomBatchGenerateImages = async (count: number) => {
+    // Get eligible entries once, excluding already queued/processing items
+    const eligibleEntries = filteredData.filter(entry => 
+      entry.prompt && 
+      entry.prompt.trim() !== '' && 
+      entry.imageStatus !== 'queued' && 
+      entry.imageStatus !== 'processing' && 
+      (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+    );
     
-    if (isNaN(count) || count <= 0) {
-      toast.error('Please enter a valid positive number.');
+    if (eligibleEntries.length === 0) {
+      toast.error('No eligible entries found for image generation.');
       return;
     }
     
-    await startBatchImageGeneration(count);
-    setShowImageBatchMenu(false);
+    const itemsForThisRun = eligibleEntries.slice(0, count);
+    await startBatchImageGeneration(itemsForThisRun);
   };
 
   const handleBatchGenerateAllEligibleImages = async () => {
     const eligibleEntries = filteredData.filter(entry => 
       entry.prompt && 
       entry.prompt.trim() !== '' && 
+      entry.imageStatus !== 'queued' && 
+      entry.imageStatus !== 'processing' && 
       (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
     );
     
@@ -397,7 +362,6 @@ export default function DataTable() {
     }
     
     await startBatchImageGeneration(eligibleEntries);
-    setShowImageBatchMenu(false);
   };
 
   const columns = useMemo<ColumnDef<WordEntry>[]>(
@@ -675,141 +639,60 @@ export default function DataTable() {
           <option value="LOW">Low Suitability</option>
         </select>
 
-        {/* Batch Generate Button */}
-        <div className="relative" ref={batchMenuRef}>
-          <button
-            onClick={() => setShowBatchMenu(!showBatchMenu)}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Sparkles className="h-4 w-4" />
-            Batch Generate
-          </button>
-          
-          {showBatchMenu && (
-            <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
-              <div className="p-2">
-                <div className="mb-2">
-                  <div className="text-xs text-gray-400 mb-1">Generate prompts for:</div>
-                  <input
-                    type="number"
-                    value={customBatchGenerateCount}
-                    onChange={(e) => setCustomBatchGenerateCount(e.target.value)}
-                    placeholder="Number of words"
-                    className="input-field w-full text-sm px-3 py-2"
-                    min="1"
-                    aria-label="Number of prompts to generate"
-                  />
-                  <button
-                    onClick={handleCustomBatchGeneratePrompts}
-                    disabled={!customBatchGenerateCount || parseInt(customBatchGenerateCount, 10) <= 0}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-1"
-                  >
-                    Generate First {customBatchGenerateCount || 'N'} Prompts
-                  </button>
-                </div>
-                <div className="border-t border-gray-700 my-2"></div>
-                <button
-                  onClick={() => {
-                    const allWithoutPromptsCount = filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length;
-                    if (allWithoutPromptsCount > 0) {
-                      handleBatchGeneratePrompts(allWithoutPromptsCount);
-                    } else {
-                      toast.error('No entries without prompts found');
-                    }
-                    setShowBatchMenu(false);
-                  }}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
-                >
-                  All without prompts ({filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length})
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        {/* Batch Generate Prompts Menu */}
+        <BatchActionMenu
+          triggerButtonLabel="Batch Generate"
+          triggerButtonIcon={<Sparkles className="h-4 w-4" />}
+          menuTitle="Generate prompts for:"
+          countInputState={[customBatchGenerateCount, setCustomBatchGenerateCount]}
+          onCustomCountAction={handleCustomBatchGeneratePrompts}
+          customCountActionLabel={(count) => `Generate First ${count || 'N'} Prompts`}
+          onAllEligibleAction={() => {
+            const allWithoutPromptsCount = filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length;
+            if (allWithoutPromptsCount > 0) {
+              handleBatchGeneratePrompts(allWithoutPromptsCount);
+            } else {
+              toast.error('No entries without prompts found');
+            }
+          }}
+          allEligibleActionLabel="All without prompts"
+          getEligibleCount={() => filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length}
+        />
 
-        {/* Categorization Button */}
-        <div className="relative" ref={categorizationMenuRef}>
-          <button
-            onClick={() => setShowCategorizationMenu(!showCategorizationMenu)}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Filter className="h-4 w-4" />
-            Categorize (TIAC)
-          </button>
-          
-          {showCategorizationMenu && (
-            <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
-              <div className="p-2">
-                <div className="text-xs text-gray-400 mb-2">Categorize vocabulary for:</div>
-                <input
-                  type="number"
-                  value={customCategorizeCount}
-                  onChange={(e) => setCustomCategorizeCount(e.target.value)}
-                  placeholder="Number of words"
-                  className="input-field w-full text-sm px-3 py-2 mb-2"
-                  min="1"
-                  aria-label="Number of words to categorize"
-                />
-                <button
-                  onClick={handleCustomBatchCategorize}
-                  disabled={!customCategorizeCount || parseInt(customCategorizeCount, 10) <= 0}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Categorize First {customCategorizeCount || 'N'} Words
-                </button>
-                <button
-                  onClick={() => {
-                    const allWithoutCategorization = filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length;
-                    handleBatchCategorize(allWithoutCategorization);
-                    setShowCategorizationMenu(false);
-                  }}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-2 pt-2"
-                >
-                  All uncategorized ({filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length})
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        {/* Categorization Menu */}
+        <BatchActionMenu
+          triggerButtonLabel="Categorize (TIAC)"
+          triggerButtonIcon={<Filter className="h-4 w-4" />}
+          menuTitle="Categorize vocabulary for:"
+          countInputState={[customCategorizeCount, setCustomCategorizeCount]}
+          onCustomCountAction={handleCustomBatchCategorize}
+          customCountActionLabel={(count) => `Categorize First ${count || 'N'} Words`}
+          onAllEligibleAction={() => {
+            const allWithoutCategorization = filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length;
+            handleBatchCategorize(allWithoutCategorization);
+          }}
+          allEligibleActionLabel="All uncategorized"
+          getEligibleCount={() => filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length}
+        />
 
-        {/* Batch Images Button */}
-        <div className="relative" ref={imageBatchMenuRef}>
-          <button
-            onClick={() => setShowImageBatchMenu(!showImageBatchMenu)}
-            className="btn-primary flex items-center gap-2"
-          >
-            <ImageIcon className="h-4 w-4" />
-            Batch Images
-          </button>
-          
-          {showImageBatchMenu && (
-            <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10 p-2">
-              <div className="text-xs text-gray-400 mb-1">Generate images for first:</div>
-              <input
-                type="number"
-                value={customImageBatchCount}
-                onChange={(e) => setCustomImageBatchCount(e.target.value)}
-                placeholder="Number of entries"
-                className="input-field w-full text-sm px-3 py-2"
-                min="1"
-              />
-              <button
-                onClick={handleCustomBatchGenerateImages}
-                disabled={!customImageBatchCount || parseInt(customImageBatchCount, 10) <= 0}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-1"
-              >
-                Generate for {customImageBatchCount || 'N'} (Eligible)
-              </button>
-              <div className="border-t border-gray-700 my-2" />
-              <button
-                onClick={handleBatchGenerateAllEligibleImages}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
-              >
-                All eligible ({filteredData.filter(entry => entry.prompt && entry.prompt.trim() !== '' && (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')).length})
-              </button>
-            </div>
-          )}
-        </div>
+        {/* Batch Images Menu */}
+        <BatchActionMenu
+          triggerButtonLabel="Batch Images"
+          triggerButtonIcon={<ImageIcon className="h-4 w-4" />}
+          menuTitle="Generate images for first:"
+          countInputState={[customImageBatchCount, setCustomImageBatchCount]}
+          onCustomCountAction={handleCustomBatchGenerateImages}
+          customCountActionLabel={(count) => `Generate for ${count || 'N'} (Eligible)`}
+          onAllEligibleAction={handleBatchGenerateAllEligibleImages}
+          allEligibleActionLabel="All eligible"
+          getEligibleCount={() => filteredData.filter(entry => 
+            entry.prompt && 
+            entry.prompt.trim() !== '' && 
+            entry.imageStatus !== 'queued' && 
+            entry.imageStatus !== 'processing' && 
+            (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+          ).length}
+        />
       </div>
 
       {/* Table */}

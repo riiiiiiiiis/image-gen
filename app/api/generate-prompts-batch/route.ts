@@ -1,22 +1,20 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import {
   callOpenRouter,
-  handleOpenRouterError,
   formatOpenRouterBatchPromptMessages,
   BatchPromptEntry,
 } from '@/lib/openrouter';
 import { getPromptOverride } from '@/lib/promptOverrides';
+import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
 
-export async function POST(request: Request) {
-  try {
-    const { entries }: { entries: BatchPromptEntry[] } = await request.json();
-
-    if (!entries || !Array.isArray(entries) || entries.length === 0) {
-      return NextResponse.json(
-        { error: 'Missing or invalid entries array' },
-        { status: 400 }
-      );
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { entries: BatchPromptEntry[] }) => {
+    const validation = validateRequestArray(body.entries, 'entries');
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
+
+    const { entries } = body;
 
     // Check for overrides first and separate entries
     const overriddenResults: { id: number; prompt: string }[] = [];
@@ -82,11 +80,5 @@ export async function POST(request: Request) {
     const sortedResults = allResults.sort((a, b) => a.id - b.id);
 
     return NextResponse.json({ prompts: sortedResults });
-  } catch (error: unknown) {
-    const errorInfo = handleOpenRouterError(error);
-    return NextResponse.json(
-      { error: errorInfo.message },
-      { status: errorInfo.status }
-    );
-  }
+  });
 }

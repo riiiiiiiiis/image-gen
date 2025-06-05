@@ -1,6 +1,6 @@
 import * as yaml from 'js-yaml';
 import * as fs from 'fs';
-import * as path from 'path';
+import { PROMPT_OVERRIDES_YAML_PATH } from './paths';
 
 interface PromptOverrides {
   [key: string]: string;
@@ -9,18 +9,17 @@ interface PromptOverrides {
 let cachedOverrides: PromptOverrides | null = null;
 let lastModified: number = 0;
 
-const OVERRIDES_FILE_PATH = path.join(process.cwd(), 'prompt_overrides.yaml');
 
 function loadOverrides(): PromptOverrides {
   try {
     // Check if file exists
-    if (!fs.existsSync(OVERRIDES_FILE_PATH)) {
+    if (!fs.existsSync(PROMPT_OVERRIDES_YAML_PATH)) {
       console.log('No prompt_overrides.yaml file found, using default behavior');
       return {};
     }
 
     // Check if we need to reload (file modified)
-    const stats = fs.statSync(OVERRIDES_FILE_PATH);
+    const stats = fs.statSync(PROMPT_OVERRIDES_YAML_PATH);
     const currentModified = stats.mtime.getTime();
 
     if (cachedOverrides && currentModified === lastModified) {
@@ -28,7 +27,7 @@ function loadOverrides(): PromptOverrides {
     }
 
     // Load and parse YAML file
-    const fileContents = fs.readFileSync(OVERRIDES_FILE_PATH, 'utf8');
+    const fileContents = fs.readFileSync(PROMPT_OVERRIDES_YAML_PATH, 'utf8');
     const overrides = yaml.load(fileContents) as PromptOverrides;
 
     // Update cache

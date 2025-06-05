@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { handleAiServiceError, AI_SERVICE_CONFIGS } from './aiUtils';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
@@ -82,31 +83,5 @@ export function formatBatchPrompt(entries: Array<{ id: number; english: string; 
 }
 
 export function handleGeminiError(error: any) {
-  console.error('Gemini API Error:', error);
-  
-  if (error.message?.includes('API_KEY_INVALID') || error.message?.includes('Invalid API key')) {
-    return {
-      message: 'Invalid API key. Please check your GEMINI_API_KEY in .env.local',
-      status: 401
-    };
-  }
-  
-  if (error.message?.includes('not found') || error.message?.includes('404')) {
-    return {
-      message: 'Gemini model not available. Please check the model name.',
-      status: 404
-    };
-  }
-  
-  if (error.message?.includes('RATE_LIMIT_EXCEEDED') || error.message?.includes('quota')) {
-    return {
-      message: 'Rate limit exceeded. Please try again later.',
-      status: 429
-    };
-  }
-  
-  return {
-    message: error.message || 'Failed to generate content',
-    status: 500
-  };
+  return handleAiServiceError(error, AI_SERVICE_CONFIGS.gemini);
 }
