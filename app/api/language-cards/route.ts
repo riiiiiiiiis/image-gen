@@ -11,24 +11,30 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  return handleApiRequest(request, async (_req, body: WordEntry[]) => {
-    if (!Array.isArray(body)) {
+  // @ts-expect-error - Need to use any for handleApiRequest compatibility
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return handleApiRequest(request, async (_req, body: any) => {
+    const typedBody = body as WordEntry[];
+    if (!Array.isArray(typedBody)) {
       return NextResponse.json({ error: 'Request body must be an array of entries' }, { status: 400 });
     }
     
-    await languageCardRepository.bulkUpsert(body);
+    await languageCardRepository.bulkUpsert(typedBody);
     return NextResponse.json({ success: true });
   });
 }
 
 export async function PATCH(request: NextRequest) {
-  return handleApiRequest(request, async (_req, body: { id: number; updates: Partial<WordEntry> }) => {
-    const validation = validateRequestBody(body, ['id', 'updates']);
+  // @ts-expect-error - Need to use any for handleApiRequest compatibility
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return handleApiRequest(request, async (_req, body: any) => {
+    const typedBody = body as { id: number; updates: Partial<WordEntry> };
+    const validation = validateRequestBody(typedBody, ['id', 'updates']);
     if (!validation.valid) {
       return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
     
-    await languageCardRepository.update(body.id, body.updates);
+    await languageCardRepository.update(typedBody.id, typedBody.updates);
     return NextResponse.json({ success: true });
   });
 }

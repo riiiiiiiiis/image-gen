@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { imageQueue } from '@/lib/imageQueue';
+import { imageQueue, QueueItem, NotifyCompletionResult } from '@/lib/imageQueue';
 import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
 
 // In-memory storage for completion callbacks
-const completionCallbacks = new Map<string, (result: any) => void>();
+const completionCallbacks = new Map<string, (result: NotifyCompletionResult) => void>();
 const errorCallbacks = new Map<string, (error: string) => void>();
 
 // Set up notification handlers on the queue instance
-(imageQueue as any).notifyCompletion = function(item: any, result: any) {
+(imageQueue as unknown as { notifyCompletion: (item: QueueItem, result: NotifyCompletionResult) => void }).notifyCompletion = function(item: QueueItem, result: NotifyCompletionResult) {
   const callback = completionCallbacks.get(item.id);
   if (callback) {
     callback(result);
@@ -15,7 +15,7 @@ const errorCallbacks = new Map<string, (error: string) => void>();
   }
 };
 
-(imageQueue as any).notifyError = function(item: any, error: string) {
+(imageQueue as unknown as { notifyError: (item: QueueItem, error: string) => void }).notifyError = function(item: QueueItem, error: string) {
   const errorCallback = errorCallbacks.get(item.id);
   if (errorCallback) {
     errorCallback(error);
@@ -24,17 +24,20 @@ const errorCallbacks = new Map<string, (error: string) => void>();
 };
 
 export async function POST(request: NextRequest) {
-  return handleApiRequest(request, async (_req, body: { action: string; [key: string]: any }) => {
-    const validation = validateRequestBody(body, ['action']);
+  // @ts-expect-error - Complex return type that doesn't fit generic constraints
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return handleApiRequest(request, async (_req, body: any) => {
+    const typedBody = body as { action: string; [key: string]: unknown };
+    const validation = validateRequestBody(typedBody, ['action']);
     if (!validation.valid) {
       return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
 
-    const { action, ...data } = body;
+    const { action, ...data } = typedBody;
 
     switch (action) {
       case 'add':
-        return handleAddToQueue(data);
+        return handleAddToQueue(data as { entryId: number; englishWord: string; prompt: string; [key: string]: unknown });
       case 'status':
         return handleGetStatus();
       case 'items':
@@ -48,7 +51,7 @@ export async function POST(request: NextRequest) {
   });
 }
 
-async function handleAddToQueue(data: any) {
+async function handleAddToQueue(data: { entryId: number; englishWord: string; prompt: string; [key: string]: unknown }) {
   const { entryId, englishWord, prompt } = data;
 
   console.log(`API: Adding to queue - entryId: ${entryId}, word: ${englishWord}`);
@@ -68,7 +71,7 @@ async function handleAddToQueue(data: any) {
     console.log(`API: Added to queue with ID: ${queueId}`);
 
     // Create a promise that resolves when the image is generated
-    const resultPromise = new Promise<any>((resolve, reject) => {
+    const resultPromise = new Promise<NotifyCompletionResult>((resolve, reject) => {
       const timeout = setTimeout(() => {
         completionCallbacks.delete(queueId);
         errorCallbacks.delete(queueId);
@@ -95,10 +98,10 @@ async function handleAddToQueue(data: any) {
       ...result,
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error adding to queue:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to generate image' },
+      { error: (error instanceof Error ? error.message : String(error)) || 'Failed to generate image' },
       { status: 500 }
     );
   }

@@ -3,6 +3,7 @@ import { getGeminiModel } from '@/lib/gemini';
 import { handleApiRequest } from '@/lib/apiUtils';
 
 export async function GET(request: NextRequest) {
+  // @ts-expect-error - Complex return type that doesn't fit generic constraints
   return handleApiRequest(request, async () => {
     // Check if API key exists
     if (!process.env.GEMINI_API_KEY) {

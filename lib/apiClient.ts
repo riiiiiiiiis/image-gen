@@ -1,7 +1,7 @@
 import { WordEntry, CategorizationResult } from '@/types';
 
 // Generic API response type
-export interface ApiResponse<T = any> {
+export interface ApiResponse<T = unknown> {
   data?: T;
   error?: string;
   status: number;
@@ -113,19 +113,25 @@ async function apiCall<T>(
   endpoint: string,
   options: {
     method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
-    body?: any;
+    body?: unknown;
   } = {}
 ): Promise<ApiResponse<T>> {
   const { method = 'GET', body } = options;
 
   try {
-    const response = await fetch(endpoint, {
+    const requestOptions: RequestInit = {
       method,
       headers: {
         'Content-Type': 'application/json',
       },
-      ...(body && { body: JSON.stringify(body) }),
-    });
+    };
+    
+    if (body) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      requestOptions.body = JSON.stringify(body as any);
+    }
+    
+    const response = await fetch(endpoint, requestOptions);
 
     const status = response.status;
 

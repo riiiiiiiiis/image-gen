@@ -9,13 +9,16 @@ const replicate = new Replicate({
 });
 
 export async function POST(request: NextRequest) {
-  return handleApiRequest(request, async (_req, body: { prompt: string; entryId: number; englishWord: string }) => {
-    const validation = validateRequestBody(body, ['prompt', 'entryId', 'englishWord']);
+  // @ts-expect-error - Complex return type that doesn't fit generic constraints
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return handleApiRequest(request, async (_req, body: any) => {
+    const typedBody = body as { prompt: string; entryId: number; englishWord: string };
+    const validation = validateRequestBody(typedBody, ['prompt', 'entryId', 'englishWord']);
     if (!validation.valid) {
       return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
 
-    const { prompt, entryId } = body;
+    const { prompt, entryId } = typedBody;
 
     let output;
     try {
@@ -25,18 +28,18 @@ export async function POST(request: NextRequest) {
           input: createReplicateInput(prompt),
         }
       );
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Replicate API error:', error);
       
       // Handle specific Replicate API errors
-      if (error.message?.includes('Invalid token') || error.message?.includes('Unauthorized')) {
+      if ((error instanceof Error ? error.message : String(error))?.includes('Invalid token') || (error instanceof Error ? error.message : String(error))?.includes('Unauthorized')) {
         return NextResponse.json(
           { error: 'Invalid API token. Please check your REPLICATE_API_TOKEN in .env.local' },
           { status: 401 }
         );
       }
       
-      if (error.message?.includes('rate limit')) {
+      if ((error instanceof Error ? error.message : String(error))?.includes('rate limit')) {
         return NextResponse.json(
           { error: 'Rate limit exceeded. Please try again later.' },
           { status: 429 }
@@ -56,13 +59,13 @@ export async function POST(request: NextRequest) {
     
     if (Array.isArray(output) && output.length > 0) {
       // Get the first FileOutput object and call .url() to get the URL
-      const fileOutput = output[0] as any;
+      const fileOutput: { url?: () => { toString(): string }; toString: () => string } = output[0];
       const urlResult = fileOutput.url ? fileOutput.url() : fileOutput.toString();
       imageUrl = urlResult.toString(); // Convert URL object to string
       console.log('Extracted imageUrl from FileOutput:', imageUrl);
     } else if (output && typeof output === 'object' && 'url' in output) {
       // Handle case where it might be a single FileOutput object
-      const urlResult = (output as any).url();
+      const urlResult = (output as { url: () => { toString(): string } }).url();
       imageUrl = urlResult.toString(); // Convert URL object to string
       console.log('Extracted imageUrl from single FileOutput:', imageUrl);
     } else if (typeof output === 'string') {

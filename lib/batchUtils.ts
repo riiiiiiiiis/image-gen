@@ -8,9 +8,9 @@ export interface BatchProcessorConfig<TPayload, TResult, TError> {
   delayBetweenBatchesMs: number;
   operationName: string;
   getBatchPayload: (batch: WordEntry[]) => TPayload;
-  batchApiService: (payload: TPayload) => Promise<ApiResponse<any>>;
-  getSuccessItems: (responseData: any, batchItems: WordEntry[]) => TResult[];
-  getErrorItems: (responseData: any) => TError[];
+  batchApiService: (payload: TPayload) => Promise<ApiResponse<unknown>>;
+  getSuccessItems: (responseData: unknown, batchItems: WordEntry[]) => TResult[];
+  getErrorItems: (responseData: unknown) => TError[];
   processItemSuccess: (itemResult: TResult, originalEntry: WordEntry) => void;
   processItemError: (itemError: TError, originalEntry?: WordEntry) => void;
   onStartProcessingItem?: (entry: WordEntry) => void;
@@ -44,7 +44,7 @@ export async function processBatch<TPayload, TResult extends { id: number }, TEr
   let totalSuccess = 0;
   let totalFailed = 0;
 
-  activityManager.addActivity(operationKey, `Starting ${operationName}...`, 'info');
+  activityManager.addActivity('info', `Starting ${operationName}...`);
 
   const batches = [];
   for (let i = 0; i < itemsToProcess.length; i += batchSize) {
@@ -98,7 +98,7 @@ export async function processBatch<TPayload, TResult extends { id: number }, TEr
           totalFailed++;
           
           if (error.id && 'error' in error) {
-            const errorMessage = (error as any).error;
+            const errorMessage = typeof error === 'object' && error !== null && 'error' in error ? (error as { error: string }).error : 'Unknown error';
             const entryText = originalEntry ? `Word "${originalEntry.original_text}" (ID: ${error.id})` : `Item ${error.id}`;
             activityManager.addActivity(
               `${operationKey}-item-${error.id}-error`,

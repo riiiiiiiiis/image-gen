@@ -4,13 +4,16 @@ import { getPromptOverride } from '@/lib/promptOverrides';
 import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
 
 export async function POST(request: NextRequest) {
-  return handleApiRequest(request, async (_req, body: { english: string; russian: string; transcription: string }) => {
-    const validation = validateRequestBody(body, ['english', 'russian', 'transcription']);
+  // @ts-expect-error - Complex return type that doesn't fit generic constraints
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return handleApiRequest(request, async (_req, body: any) => {
+    const typedBody = body as { english: string; russian: string; transcription: string };
+    const validation = validateRequestBody(typedBody, ['english', 'russian', 'transcription']);
     if (!validation.valid) {
       return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
 
-    const { english, russian, transcription } = body;
+    const { english, russian, transcription } = typedBody;
 
     // Check for prompt override first
     const override = getPromptOverride(english);

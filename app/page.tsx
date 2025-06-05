@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import FileUpload from '@/components/FileUpload';
 import DataTable from '@/components/DataTable';
