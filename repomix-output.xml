@@ -4670,6 +4670,94 @@ export const imageQueue = new ImageGenerationQueue();
 export type { QueueItem };
 </file>
 
+<file path="next.config.ts">
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'replicate.delivery',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'pbxt.replicate.delivery',
+        pathname: '/**',
+      },
+    ],
+  },
+  // Disable the Next.js dev indicator completely
+  devIndicators: false,
+  // Fix file watching issues (only when not using Turbopack)
+  webpack: (config, { dev, isServer }) => {
+    // Check if Turbopack is being used
+    const isTurbopack = process.env.TURBOPACK === '1' || process.argv.includes('--turbopack');
+    
+    if (dev && !isServer && !isTurbopack) {
+      config.watchOptions = {
+        poll: 1000, // Check for changes every second
+        aggregateTimeout: 300, // Delay rebuild after change detection
+        ignored: [
+          '**/node_modules',
+          '**/.next',
+          '**/.git',
+          '**/public/images', // Also ignore generated images
+        ],
+      };
+    }
+    return config;
+  },
+};
+
+export default nextConfig;
+</file>
+
+<file path="package.json">
+{
+  "name": "sdxl-emoji-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@tailwindcss/postcss": "^4.1.7",
+    "@tanstack/react-table": "^8.21.3",
+    "axios": "^1.9.0",
+    "better-sqlite3": "^11.10.0",
+    "js-yaml": "^4.1.0",
+    "kysely": "^0.28.2",
+    "lucide-react": "^0.511.0",
+    "next": "15.3.2",
+    "postcss": "^8.5.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-dropzone": "^14.3.8",
+    "react-hot-toast": "^2.5.2",
+    "replicate": "^1.0.1",
+    "sharp": "^0.34.2",
+    "tailwindcss": "^4.1.7",
+    "zustand": "^5.0.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9.27.0",
+    "eslint-config-next": "^15.3.3",
+    "typescript": "^5"
+  }
+}
+</file>
+
 <file path="store/useAppStore.ts">
 import { create } from 'zustand';
 import { WordEntry, AppState } from '@/types';
@@ -4820,16 +4908,24 @@ export const useAppStore = create<AppStore>()((set, get) => ({
               if (updatedEntry.promptStatus === 'generating') {
                 // Prompt generation was interrupted, reset status
                 updatedEntry.promptStatus = 'error'; 
-                console.log(`Resetting stuck promptStatus to 'error' for entry ID ${entry.id}`);
+                console.log(`Resetting stuck promptStatus 'generating' to 'error' for entry ID ${entry.id}`);
               }
               if (updatedEntry.imageStatus === 'processing') {
                 // Single image generation was interrupted, reset status
                 updatedEntry.imageStatus = 'error';
                 console.log(`Resetting stuck imageStatus 'processing' to 'error' for entry ID ${entry.id}`);
               }
-              // Note: 'queued' status (typically from batch operations) is left as is.
-              // The server-side queue is in-memory, so these might also be stale after a server restart.
-              // A more advanced system might involve checking job statuses against the server if the queue were persistent.
+              if (updatedEntry.imageStatus === 'queued') {
+                // If it's 'queued' and has an image, it's likely an error or incomplete update from a previous batch.
+                // If it's 'queued' and has NO image, it's a truly stale queue item that never started.
+                if (updatedEntry.imageUrl) {
+                    updatedEntry.imageStatus = 'error';
+                    console.log(`Resetting stuck imageStatus 'queued' (with image) to 'error' for entry ID ${entry.id}`);
+                } else {
+                    updatedEntry.imageStatus = 'none';
+                    console.log(`Resetting stuck imageStatus 'queued' (no image) to 'none' for entry ID ${entry.id}`);
+                }
+              }
               return updatedEntry;
             });
             set({ entries, isInitialized: true });
@@ -4847,94 +4943,6 @@ export const useAppStore = create<AppStore>()((set, get) => ({
 // Initialize database on first load
 if (typeof window !== 'undefined') {
   useAppStore.getState().loadFromDatabase();
-}
-</file>
-
-<file path="next.config.ts">
-import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
-  images: {
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'replicate.delivery',
-        pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: 'pbxt.replicate.delivery',
-        pathname: '/**',
-      },
-    ],
-  },
-  // Disable the Next.js dev indicator completely
-  devIndicators: false,
-  // Fix file watching issues (only when not using Turbopack)
-  webpack: (config, { dev, isServer }) => {
-    // Check if Turbopack is being used
-    const isTurbopack = process.env.TURBOPACK === '1' || process.argv.includes('--turbopack');
-    
-    if (dev && !isServer && !isTurbopack) {
-      config.watchOptions = {
-        poll: 1000, // Check for changes every second
-        aggregateTimeout: 300, // Delay rebuild after change detection
-        ignored: [
-          '**/node_modules',
-          '**/.next',
-          '**/.git',
-          '**/public/images', // Also ignore generated images
-        ],
-      };
-    }
-    return config;
-  },
-};
-
-export default nextConfig;
-</file>
-
-<file path="package.json">
-{
-  "name": "sdxl-emoji-pipeline",
-  "version": "0.1.0",
-  "private": true,
-  "scripts": {
-    "dev": "next dev --turbopack",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
-  },
-  "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "@tailwindcss/postcss": "^4.1.7",
-    "@tanstack/react-table": "^8.21.3",
-    "axios": "^1.9.0",
-    "better-sqlite3": "^11.10.0",
-    "js-yaml": "^4.1.0",
-    "kysely": "^0.28.2",
-    "lucide-react": "^0.511.0",
-    "next": "15.3.2",
-    "postcss": "^8.5.3",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-dropzone": "^14.3.8",
-    "react-hot-toast": "^2.5.2",
-    "replicate": "^1.0.1",
-    "sharp": "^0.34.2",
-    "tailwindcss": "^4.1.7",
-    "zustand": "^5.0.5"
-  },
-  "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/js-yaml": "^4.0.9",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9.27.0",
-    "eslint-config-next": "^15.3.3",
-    "typescript": "^5"
-  }
 }
 </file>
 
@@ -5486,11 +5494,7 @@ export default function DataTable() {
               <button
                 onClick={() => handleGenerateImage(entry)}
                 disabled={!entry.prompt || (entry.imageStatus === 'processing' || entry.imageStatus === 'queued')}
-                className={`btn-primary ${
-                  (!entry.prompt || (entry.imageStatus === 'processing' || entry.imageStatus === 'queued')) 
-                  ? 'opacity-50 cursor-not-allowed' 
-                  : ''
-                }`}
+                className="btn-primary"
               >
                 {entry.imageStatus === 'processing' || entry.imageStatus === 'queued' ? (
                   <div className="loading-spinner" />
@@ -5506,7 +5510,7 @@ export default function DataTable() {
         },
       },
     ],
-    [editingId, editingPrompt, entries]
+    [editingId, editingPrompt]
   );
 
   const table = useReactTable({
