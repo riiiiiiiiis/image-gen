@@ -64,6 +64,8 @@ app/
       route.ts
     test-gemini/
       route.ts
+    upload/
+      route.ts
   globals.css
   layout.tsx
   page.tsx
@@ -100,6 +102,7 @@ lib/
   paths.ts
   promptOverrides.ts
   replicateConfig.ts
+  vercelBlobUpload.ts
 public/
   file.svg
   globe.svg
@@ -141,6 +144,31 @@ This section contains the contents of the repository's files.
     "deny": []
   },
   "enableAllProjectMcpServers": false
+}
+</file>
+
+<file path="app/api/upload/route.ts">
+import { NextResponse } from 'next/server';
+import { uploadFileToBlob } from '@/lib/vercelBlobUpload';
+
+export async function POST(request: Request) {
+  const formData = await request.formData();
+  const file = formData.get('file') as File | null;
+
+  if (!file) {
+    return NextResponse.json({ error: 'No file provided.' }, { status: 400 });
+  }
+
+  try {
+    // Construct a unique filename, e.g., using entryId or a timestamp if not available from client
+    // For now, using original file.name, but for programmatic uploads, you'll generate this.
+    const fileName = `uploads/${Date.now()}-${file.name}`;
+    const url = await uploadFileToBlob(fileName, file);
+    return NextResponse.json({ url });
+  } catch (error) {
+    console.error('Upload API error:', error);
+    return NextResponse.json({ error: 'Failed to upload file.' }, { status: 500 });
+  }
 }
 </file>
 
@@ -1179,6 +1207,28 @@ export const GALLERY_JSON_PATH = path.join(DATA_DIR, 'gallery.json');
 export const IMAGES_DIR_PATH = path.join(PUBLIC_DIR, 'images');
 export const PROMPT_OVERRIDES_YAML_PATH = path.join(CWD, 'prompt_overrides.yaml');
 export const DATABASE_FILE_PATH = path.join(DATA_DIR, 'language-cards.db');
+</file>
+
+<file path="lib/vercelBlobUpload.ts">
+import { put } from '@vercel/blob';
+import { Buffer } from 'buffer';
+
+// Option 1: If you can get a File object (e.g., from FormData)
+export async function uploadFileToBlob(fileName: string, fileContent: File): Promise<string> {
+  const blob = await put(fileName, fileContent, {
+    access: 'public',
+  });
+  return blob.url;
+}
+
+// Option 2: If you have a Buffer (e.g., after fetching from Replicate)
+export async function uploadBufferToBlob(fileName: string, fileBuffer: Buffer, contentType: string): Promise<string> {
+  const blob = await put(fileName, fileBuffer, {
+    access: 'public',
+    contentType: contentType, // e.g., 'image/png'
+  });
+  return blob.url;
+}
 </file>
 
 <file path="public/file.svg">
@@ -2669,118 +2719,6 @@ const config = {
 export default config;
 </file>
 
-<file path="app/api/generate-image/route.ts">
-import Replicate from 'replicate';
-import { NextRequest, NextResponse } from 'next/server';
-import { getReplicateModel, createReplicateInput } from '@/lib/replicateConfig';
-import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
-import { saveImageFromUrl } from '@/lib/imageUtils';
-
-const replicate = new Replicate({
-  auth: process.env.REPLICATE_API_TOKEN!,
-});
-
-export async function POST(request: NextRequest) {
-  return handleApiRequest(request, async (_req, body: { prompt: string; entryId: number; englishWord: string }) => {
-    const validation = validateRequestBody(body, ['prompt', 'entryId', 'englishWord']);
-    if (!validation.valid) {
-      return NextResponse.json({ error: validation.error }, { status: validation.status });
-    }
-
-    const { prompt, entryId } = body;
-
-    let output;
-    try {
-      output = await replicate.run(
-        getReplicateModel(),
-        {
-          input: createReplicateInput(prompt),
-        }
-      );
-    } catch (error: any) {
-      console.error('Replicate API error:', error);
-      
-      // Handle specific Replicate API errors
-      if (error.message?.includes('Invalid token') || error.message?.includes('Unauthorized')) {
-        return NextResponse.json(
-          { error: 'Invalid API token. Please check your REPLICATE_API_TOKEN in .env.local' },
-          { status: 401 }
-        );
-      }
-      
-      if (error.message?.includes('rate limit')) {
-        return NextResponse.json(
-          { error: 'Rate limit exceeded. Please try again later.' },
-          { status: 429 }
-        );
-      }
-      
-      throw error; // Re-throw to let handleApiRequest handle it
-    }
-
-    console.log('Raw output from replicate.run:', output);
-    console.log('Output type:', typeof output);
-    console.log('Is array?', Array.isArray(output));
-
-    // The output from replicate.run() is typically an array of FileOutput objects
-    // For SDXL-emoji with num_outputs: 1, it should be an array with one FileOutput
-    let imageUrl: string;
-    
-    if (Array.isArray(output) && output.length > 0) {
-      // Get the first FileOutput object and call .url() to get the URL
-      const fileOutput = output[0] as any;
-      const urlResult = fileOutput.url ? fileOutput.url() : fileOutput.toString();
-      imageUrl = urlResult.toString(); // Convert URL object to string
-      console.log('Extracted imageUrl from FileOutput:', imageUrl);
-    } else if (output && typeof output === 'object' && 'url' in output) {
-      // Handle case where it might be a single FileOutput object
-      const urlResult = (output as any).url();
-      imageUrl = urlResult.toString(); // Convert URL object to string
-      console.log('Extracted imageUrl from single FileOutput:', imageUrl);
-    } else if (typeof output === 'string') {
-      // Handle case where it might already be a URL string
-      imageUrl = output;
-      console.log('Output was already a string URL:', imageUrl);
-    } else {
-      console.error('Unexpected output format:', output);
-      throw new Error('Unexpected output format from Replicate');
-    }
-    
-    // Validate that we got a valid URL
-    if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.startsWith('http')) {
-      console.error('Invalid imageUrl received:', imageUrl);
-      return NextResponse.json(
-        { error: 'Failed to get a valid image URL' },
-        { status: 500 }
-      );
-    }
-
-    // Download and save the image locally
-    try {
-      const result = await saveImageFromUrl(imageUrl, entryId);
-      const generatedAt = new Date().toISOString();
-      
-      return NextResponse.json({ 
-        imageUrl: result.localImageUrl, // Return local path with cache-buster for the app to use
-        originalUrl: result.originalUrl, // Keep original URL as backup
-        localPath: result.localPath,
-        filename: result.filename,
-        status: 'completed',
-        generatedAt: generatedAt, // Add timestamp for sorting
-      });
-    } catch (downloadError) {
-      console.error('Error downloading/saving image:', downloadError);
-      // If download fails, still return the original URL
-      return NextResponse.json({ 
-        imageUrl,
-        status: 'completed',
-        downloadError: 'Failed to save image locally, using remote URL',
-      });
-    }
-  });
-}
-</file>
-
 <file path="app/api/queue-image/route.ts">
 import { NextRequest, NextResponse } from 'next/server';
 import { imageQueue } from '@/lib/imageQueue';
@@ -3270,47 +3208,6 @@ export default function QueueStatus() {
       </div>
     </div>
   );
-}
-</file>
-
-<file path="lib/db/database.ts">
-import Database from 'better-sqlite3';
-import { Kysely, SqliteDialect } from 'kysely';
-import { Database as DatabaseType, DB } from './schema';
-import { createTables } from './migrations';
-import { runMigrations } from './runMigrations';
-import { DATABASE_FILE_PATH } from '../paths';
-
-let db: DB | null = null;
-
-export function getDatabase(): DB {
-  if (!db) {
-    const dbPath = process.env.DATABASE_PATH || DATABASE_FILE_PATH;
-    
-    const sqlite = new Database(dbPath);
-    sqlite.pragma('journal_mode = WAL');
-    
-    db = new Kysely<DatabaseType>({
-      dialect: new SqliteDialect({
-        database: sqlite,
-      }),
-    });
-    
-    // Initialize tables if they don't exist
-    createTables(db);
-    
-    // Run migrations
-    runMigrations();
-  }
-  
-  return db;
-}
-
-export function closeDatabase(): void {
-  if (db) {
-    db.destroy();
-    db = null;
-  }
 }
 </file>
 
@@ -4033,6 +3930,168 @@ export async function POST(request: NextRequest) {
 }
 </file>
 
+<file path="app/api/generate-image/route.ts">
+import Replicate from 'replicate';
+import { NextRequest, NextResponse } from 'next/server';
+import { getReplicateModel, createReplicateInput } from '@/lib/replicateConfig';
+import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
+import { uploadBufferToBlob } from '@/lib/vercelBlobUpload';
+
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN!,
+});
+
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { prompt: string; entryId: number; englishWord: string }) => {
+    const validation = validateRequestBody(body, ['prompt', 'entryId', 'englishWord']);
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
+    }
+
+    const { prompt, entryId } = body;
+
+    let output;
+    try {
+      output = await replicate.run(
+        getReplicateModel(),
+        {
+          input: createReplicateInput(prompt),
+        }
+      );
+    } catch (error: any) {
+      console.error('Replicate API error:', error);
+      
+      // Handle specific Replicate API errors
+      if (error.message?.includes('Invalid token') || error.message?.includes('Unauthorized')) {
+        return NextResponse.json(
+          { error: 'Invalid API token. Please check your REPLICATE_API_TOKEN in .env.local' },
+          { status: 401 }
+        );
+      }
+      
+      if (error.message?.includes('rate limit')) {
+        return NextResponse.json(
+          { error: 'Rate limit exceeded. Please try again later.' },
+          { status: 429 }
+        );
+      }
+      
+      throw error; // Re-throw to let handleApiRequest handle it
+    }
+
+    console.log('Raw output from replicate.run:', output);
+    console.log('Output type:', typeof output);
+    console.log('Is array?', Array.isArray(output));
+
+    // The output from replicate.run() is typically an array of FileOutput objects
+    // For SDXL-emoji with num_outputs: 1, it should be an array with one FileOutput
+    let imageUrl: string;
+    
+    if (Array.isArray(output) && output.length > 0) {
+      // Get the first FileOutput object and call .url() to get the URL
+      const fileOutput = output[0] as any;
+      const urlResult = fileOutput.url ? fileOutput.url() : fileOutput.toString();
+      imageUrl = urlResult.toString(); // Convert URL object to string
+      console.log('Extracted imageUrl from FileOutput:', imageUrl);
+    } else if (output && typeof output === 'object' && 'url' in output) {
+      // Handle case where it might be a single FileOutput object
+      const urlResult = (output as any).url();
+      imageUrl = urlResult.toString(); // Convert URL object to string
+      console.log('Extracted imageUrl from single FileOutput:', imageUrl);
+    } else if (typeof output === 'string') {
+      // Handle case where it might already be a URL string
+      imageUrl = output;
+      console.log('Output was already a string URL:', imageUrl);
+    } else {
+      console.error('Unexpected output format:', output);
+      throw new Error('Unexpected output format from Replicate');
+    }
+    
+    // Validate that we got a valid URL
+    if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.startsWith('http')) {
+      console.error('Invalid imageUrl received:', imageUrl);
+      return NextResponse.json(
+        { error: 'Failed to get a valid image URL' },
+        { status: 500 }
+      );
+    }
+
+    // Upload the image to Vercel Blob
+    try {
+      // 1. Fetch the image content from the Replicate URL
+      const imageResponse = await fetch(imageUrl);
+      if (!imageResponse.ok) {
+        throw new Error(`Failed to fetch image from Replicate: ${imageResponse.statusText}`);
+      }
+      const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+      const contentType = imageResponse.headers.get('content-type') || 'image/png'; // Get content type
+
+      // 2. Define a filename for Vercel Blob
+      const blobFileName = `img/${entryId}.png`; // Or include a timestamp for cache-busting if needed at this level
+
+      // 3. Upload to Vercel Blob using the new helper
+      const blobUrl = await uploadBufferToBlob(blobFileName, imageBuffer, contentType);
+
+      const generatedAt = new Date().toISOString();
+
+      return NextResponse.json({
+        imageUrl: blobUrl, // This is now the Vercel Blob URL
+        originalUrl: imageUrl, // Still useful to keep the Replicate URL if needed
+        status: 'completed',
+        generatedAt: generatedAt,
+      });
+    } catch (uploadError) {
+      console.error('Error uploading image to Vercel Blob:', uploadError);
+      // If upload fails, still return the original URL
+      return NextResponse.json({ 
+        imageUrl,
+        status: 'completed',
+        uploadError: 'Failed to upload image to Vercel Blob, using remote URL',
+      });
+    }
+  });
+}
+</file>
+
+<file path="lib/db/database.ts">
+import { createPool } from '@vercel/postgres';
+import { Kysely, PostgresDialect } from 'kysely';
+import { Database as DatabaseType, DB } from './schema';
+// Migration imports removed - will be handled externally for Vercel deployment
+
+let db: DB | null = null;
+
+export function getDatabase(): DB {
+  if (!db) {
+    if (!process.env.DATABASE_URL) {
+      throw new Error('DATABASE_URL environment variable is not set');
+    }
+    
+    const pool = createPool({
+      connectionString: process.env.DATABASE_URL,
+    });
+    
+    db = new Kysely<DatabaseType>({
+      dialect: new PostgresDialect({
+        pool,
+      }),
+    });
+    
+    // Note: For Vercel deployment, migrations should be run externally
+    // using npx kysely migrate or similar command
+  }
+  
+  return db;
+}
+
+export function closeDatabase(): void {
+  if (db) {
+    db.destroy();
+    db = null;
+  }
+}
+</file>
+
 <file path="types/index.ts">
 export interface CategorizationResult {
   primary_category: 'CONCRETE-VISUAL' | 'ABSTRACT-SYMBOLIC' | 'ACTION-VISUAL' | 'STATE-METAPHORICAL';
@@ -4144,64 +4203,6 @@ All API routes return consistent JSON:
 ## Testing
 
 No test framework is currently configured. When adding tests, update this section with the test command.
-</file>
-
-<file path="README.md">
-# SDXL Emoji Pipeline
-
-## tech
-
-Next.js / Gemini AI / Replicate SDXL-emoji
-
-### Как запустить проект
-
-1. **Установите зависимости:**
-```bash
-npm install
-```
-
-2. **Создайте файл `.env.local` с API ключами:**
-```env
-GEMINI_API_KEY=ваш_ключ_google_gemini
-REPLICATE_API_TOKEN=ваш_токен_replicate
-```
-
-3. **Запустите проект:**
-```bash
-npm run dev
-```
-
-4. **Откройте в браузере:** [http://localhost:3000](http://localhost:3000)
-
-### Как это работает
-
-1. **Загрузка данных**: Загрузите JSON файл со словами (формат: original_text, translation_text, transcription)
-2. **Категоризация**: Нажмите "Categorize All Uncategorized" - AI определит тип слова для оптимальной генерации
-3. **Генерация промптов**: Нажмите "Generate All Prompts" - AI создаст описания сцен в стиле эмодзи
-4. **Создание изображений**: Нажмите "Generate Image" - SDXL-emoji создаст уникальные картинки
-5. **Галерея**: Просмотрите результаты, оцените качество (✅/❌)
-6. **Экспорт**: Скачайте улучшенный датасет с промптами и картинками
-
-**Важно**: Все промпты автоматически начинаются с "TOK emoji of" - это активирует стиль эмодзи!
-
-### Экономия ресурсов
-
-Для тестирования используйте пакетную обработку по N записей вместо полной загрузки:
-- **Категоризация**: обрабатывает по 10 слов за раз
-- **Генерация промптов**: можно запускать для выбранного количества записей
-
-### Настройки
-
-**Модель Gemini**: `lib/gemini.ts` - строка с `model: 'gemini-2.5-flash-preview-05-20'`
-
-**Промпт категоризации**: `app/api/categorize-vocabulary/route.ts` - промпт с категориями CONCRETE-VISUAL, ABSTRACT-SYMBOLIC и т.д.
-
-**Шаблон промпта для изображений**: `lib/gemini.ts` - функция `generatePrompt()`, правила генерации объектов
-
-**Настройки SDXL-emoji**: `lib/replicateConfig.ts`
-- Модель: `fofr/sdxl-emoji`
-- Префикс промпта: `A TOK emoji of` (обязательно!)
-- Параметры: lora_scale: 0.6, guidance_scale: 7.5, num_inference_steps: 50
 </file>
 
 <file path="app/api/generate-prompt/route.ts">
@@ -4420,10 +4421,95 @@ export default function Home() {
 }
 </file>
 
+<file path="README.md">
+# SDXL Emoji Pipeline
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/YOUR_USERNAME/sdxl-emoji-pipeline)
+
+## tech
+
+Next.js / Gemini AI / Replicate SDXL-emoji / Vercel Postgres / Vercel Blob
+
+## Environment Variables for Vercel Deployment
+
+Make sure to set these environment variables in your Vercel project settings:
+
+| Variable                | Description                               | Example Value                      |
+|-------------------------|-------------------------------------------|------------------------------------|
+| `DATABASE_URL`          | Vercel Postgres Connection String         | `postgres://...`                   |
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob Read/Write Token            | `vercel_blob_rw_...`               |
+| `GEMINI_API_KEY`        | Google Gemini API Key                     | `your_google_gemini_key`           |
+| `REPLICATE_API_TOKEN`   | Replicate API Token                       | `your_replicate_token`             |
+| `OPENROUTER_API_KEY`    | OpenRouter API Key (optional, has default) | `sk-or-v1...`                      |
+
+### Как запустить проект
+
+1. **Установите зависимости:**
+```bash
+npm install
+```
+
+2. **Создайте файл `.env.local` с API ключами:**
+```env
+GEMINI_API_KEY=ваш_ключ_google_gemini
+REPLICATE_API_TOKEN=ваш_токен_replicate
+```
+
+3. **Запустите проект:**
+```bash
+npm run dev
+```
+
+4. **Откройте в браузере:** [http://localhost:3000](http://localhost:3000)
+
+### Как это работает
+
+1. **Загрузка данных**: Загрузите JSON файл со словами (формат: original_text, translation_text, transcription)
+2. **Категоризация**: Нажмите "Categorize All Uncategorized" - AI определит тип слова для оптимальной генерации
+3. **Генерация промптов**: Нажмите "Generate All Prompts" - AI создаст описания сцен в стиле эмодзи
+4. **Создание изображений**: Нажмите "Generate Image" - SDXL-emoji создаст уникальные картинки
+5. **Галерея**: Просмотрите результаты, оцените качество (✅/❌)
+6. **Экспорт**: Скачайте улучшенный датасет с промптами и картинками
+
+**Важно**: Все промпты автоматически начинаются с "TOK emoji of" - это активирует стиль эмодзи!
+
+### Экономия ресурсов
+
+Для тестирования используйте пакетную обработку по N записей вместо полной загрузки:
+- **Категоризация**: обрабатывает по 10 слов за раз
+- **Генерация промптов**: можно запускать для выбранного количества записей
+
+### Настройки
+
+**Модель Gemini**: `lib/gemini.ts` - строка с `model: 'gemini-2.5-flash-preview-05-20'`
+
+**Промпт категоризации**: `app/api/categorize-vocabulary/route.ts` - промпт с категориями CONCRETE-VISUAL, ABSTRACT-SYMBOLIC и т.д.
+
+**Шаблон промпта для изображений**: `lib/gemini.ts` - функция `generatePrompt()`, правила генерации объектов
+
+**Настройки SDXL-emoji**: `lib/replicateConfig.ts`
+- Модель: `fofr/sdxl-emoji`
+- Префикс промпта: `A TOK emoji of` (обязательно!)
+- Параметры: lora_scale: 0.6, guidance_scale: 7.5, num_inference_steps: 50
+
+## Database Migration for Vercel
+
+After setting up your Vercel Postgres database:
+
+1. Get your `DATABASE_URL` from the Vercel dashboard
+2. Run database migrations: `npx kysely migrate up --url "$DATABASE_URL"`
+
+## Backup Recommendations (Vercel)
+
+- **Vercel Postgres:** It is highly recommended to enable daily snapshots for your Postgres instance through the Vercel dashboard.
+- **Vercel Blob:** For critical data in Vercel Blob, consider implementing a script or strategy for periodic backups. Refer to Vercel's documentation for available options and best practices.
+</file>
+
 <file path="lib/imageQueue.ts">
 import Replicate from 'replicate';
 import { getReplicateModel, createReplicateInput } from './replicateConfig';
-import { saveImageFromUrl } from './imageUtils';
+import { uploadBufferToBlob } from './vercelBlobUpload';
+import sharp from 'sharp';
 
 if (!process.env.REPLICATE_API_TOKEN) {
   console.error('REPLICATE_API_TOKEN is not set in environment variables');
@@ -4581,21 +4667,15 @@ class ImageGenerationQueue {
         throw new Error('Invalid output format');
       }
 
-      // Download and save image with resizing
-      const downloadResult = await saveImageFromUrl(imageUrl, item.entryId, {
-        resize: {
-          width: 1110,
-          height: 834,
-          fit: 'cover'
-        }
-      });
+      // Download and upload image with resizing to Vercel Blob
+      const uploadResult = await this.downloadAndUploadToBlob(imageUrl, item.entryId);
       
       item.status = 'completed';
       
       // Notify completion via callback or event
       this.notifyCompletion(item, {
-        imageUrl: downloadResult.localImageUrl,
-        originalUrl: downloadResult.originalUrl,
+        imageUrl: uploadResult.blobUrl,
+        originalUrl: uploadResult.originalUrl,
         generatedAt: new Date().toISOString(),
       });
 
@@ -4608,6 +4688,54 @@ class ImageGenerationQueue {
     }
   }
 
+
+  // Download and upload image to Vercel Blob with resizing
+  private async downloadAndUploadToBlob(imageUrl: string, entryId: number) {
+    console.log('Downloading and uploading image from:', imageUrl);
+    
+    // Fetch the image
+    const response = await fetch(imageUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.statusText}`);
+    }
+    
+    const imageBuffer = await response.arrayBuffer();
+    let buffer = Buffer.from(imageBuffer);
+    
+    // Apply resizing for batch operations
+    try {
+      const targetWidth = 1110;
+      const targetHeight = 834;
+      console.log(`Resizing image ${entryId} to ${targetWidth}x${targetHeight}...`);
+      
+      buffer = await sharp(buffer)
+        .resize(targetWidth, targetHeight, {
+          fit: 'cover',
+          position: 'center'
+        })
+        .png() // Ensure PNG output format
+        .toBuffer();
+      
+      console.log(`Image ${entryId} successfully resized to ${targetWidth}x${targetHeight}.`);
+    } catch (resizeError) {
+      console.error(`Error resizing image ${entryId}:`, resizeError);
+      throw new Error(
+        `Failed to resize image ${entryId}: ${
+          resizeError instanceof Error ? resizeError.message : String(resizeError)
+        }`
+      );
+    }
+    
+    // Upload to Vercel Blob
+    const blobFileName = `img/${entryId}.png`;
+    const blobUrl = await uploadBufferToBlob(blobFileName, buffer, 'image/png');
+    
+    return {
+      blobUrl,
+      originalUrl: imageUrl,
+      filename: `${entryId}.png`
+    };
+  }
 
   // Remove item from queue
   private removeFromQueue(queueId: string) {
@@ -4668,94 +4796,6 @@ class ImageGenerationQueue {
 // Export singleton instance
 export const imageQueue = new ImageGenerationQueue();
 export type { QueueItem };
-</file>
-
-<file path="next.config.ts">
-import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
-  images: {
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'replicate.delivery',
-        pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: 'pbxt.replicate.delivery',
-        pathname: '/**',
-      },
-    ],
-  },
-  // Disable the Next.js dev indicator completely
-  devIndicators: false,
-  // Fix file watching issues (only when not using Turbopack)
-  webpack: (config, { dev, isServer }) => {
-    // Check if Turbopack is being used
-    const isTurbopack = process.env.TURBOPACK === '1' || process.argv.includes('--turbopack');
-    
-    if (dev && !isServer && !isTurbopack) {
-      config.watchOptions = {
-        poll: 1000, // Check for changes every second
-        aggregateTimeout: 300, // Delay rebuild after change detection
-        ignored: [
-          '**/node_modules',
-          '**/.next',
-          '**/.git',
-          '**/public/images', // Also ignore generated images
-        ],
-      };
-    }
-    return config;
-  },
-};
-
-export default nextConfig;
-</file>
-
-<file path="package.json">
-{
-  "name": "sdxl-emoji-pipeline",
-  "version": "0.1.0",
-  "private": true,
-  "scripts": {
-    "dev": "next dev --turbopack",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
-  },
-  "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "@tailwindcss/postcss": "^4.1.7",
-    "@tanstack/react-table": "^8.21.3",
-    "axios": "^1.9.0",
-    "better-sqlite3": "^11.10.0",
-    "js-yaml": "^4.1.0",
-    "kysely": "^0.28.2",
-    "lucide-react": "^0.511.0",
-    "next": "15.3.2",
-    "postcss": "^8.5.3",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-dropzone": "^14.3.8",
-    "react-hot-toast": "^2.5.2",
-    "replicate": "^1.0.1",
-    "sharp": "^0.34.2",
-    "tailwindcss": "^4.1.7",
-    "zustand": "^5.0.5"
-  },
-  "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/js-yaml": "^4.0.9",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9.27.0",
-    "eslint-config-next": "^15.3.3",
-    "typescript": "^5"
-  }
-}
 </file>
 
 <file path="store/useAppStore.ts">
@@ -4943,6 +4983,102 @@ export const useAppStore = create<AppStore>()((set, get) => ({
 // Initialize database on first load
 if (typeof window !== 'undefined') {
   useAppStore.getState().loadFromDatabase();
+}
+</file>
+
+<file path="next.config.ts">
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'replicate.delivery',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'pbxt.replicate.delivery',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.blob.vercel-storage.com',
+        pathname: '/**',
+      },
+    ],
+  },
+  // Disable the Next.js dev indicator completely
+  devIndicators: false,
+  // Fix file watching issues (only when not using Turbopack)
+  webpack: (config, { dev, isServer }) => {
+    // Check if Turbopack is being used
+    const isTurbopack = process.env.TURBOPACK === '1' || process.argv.includes('--turbopack');
+    
+    if (dev && !isServer && !isTurbopack) {
+      config.watchOptions = {
+        poll: 1000, // Check for changes every second
+        aggregateTimeout: 300, // Delay rebuild after change detection
+        ignored: [
+          '**/node_modules',
+          '**/.next',
+          '**/.git',
+          '**/public/images', // Also ignore generated images
+        ],
+      };
+    }
+    return config;
+  },
+};
+
+export default nextConfig;
+</file>
+
+<file path="package.json">
+{
+  "name": "sdxl-emoji-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@tailwindcss/postcss": "^4.1.7",
+    "@tanstack/react-table": "^8.21.3",
+    "@vercel/blob": "^1.1.1",
+    "@vercel/postgres": "^0.10.0",
+    "axios": "^1.9.0",
+    "better-sqlite3": "^11.10.0",
+    "js-yaml": "^4.1.0",
+    "kysely": "^0.28.2",
+    "lucide-react": "^0.511.0",
+    "next": "15.3.2",
+    "pg": "^8.16.0",
+    "postcss": "^8.5.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-dropzone": "^14.3.8",
+    "react-hot-toast": "^2.5.2",
+    "replicate": "^1.0.1",
+    "sharp": "^0.34.2",
+    "tailwindcss": "^4.1.7",
+    "zustand": "^5.0.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9.27.0",
+    "eslint-config-next": "^15.3.3",
+    "typescript": "^5"
+  }
 }
 </file>
 
