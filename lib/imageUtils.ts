@@ -44,7 +44,7 @@ export async function saveImageFromUrl(
       buffer = await sharp(buffer)
         .resize(width, height, {
           fit,
-          position: position as any
+          position: position
         })
         .png() // Ensure PNG output format
         .toBuffer();

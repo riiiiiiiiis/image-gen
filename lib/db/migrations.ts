@@ -1,6 +1,7 @@
 import { Kysely, sql } from 'kysely';
+import { Database } from './schema';
 
-export async function createTables(db: Kysely<any>) {
+export async function createTables(db: Kysely<Database>) {
   // Check if tables already exist
   const tables = await sql<{ name: string }>`
     SELECT name FROM sqlite_master 

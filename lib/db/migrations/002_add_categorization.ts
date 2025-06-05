@@ -1,6 +1,7 @@
 import { Kysely, sql } from 'kysely';
+import { Database } from '../schema';
 
-export async function up(db: Kysely<any>) {
+export async function up(db: Kysely<Database>) {
   // Add categorization columns to word_entries table
   await db.schema
     .alterTable('word_entries')
@@ -30,7 +31,7 @@ export async function up(db: Kysely<any>) {
     .execute();
 }
 
-export async function down(db: Kysely<any>) {
+export async function down(db: Kysely<Database>) {
   // Drop the index
   await db.schema
     .dropIndex('idx_word_entries_categorization_status')

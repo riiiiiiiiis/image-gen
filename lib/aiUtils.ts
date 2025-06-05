@@ -30,7 +30,7 @@ export const AI_SERVICE_CONFIGS = {
 } as const;
 
 export function handleAiServiceError(
-  error: any,
+  error: unknown,
   config: AiServiceErrorConfig
 ): AiErrorDetail {
   console.error(`${config.serviceName} API Error:`, error);

@@ -82,6 +82,6 @@ export function formatBatchPrompt(entries: Array<{ id: number; english: string; 
   return BATCH_PROMPT_TEMPLATE.replace('{wordPairs}', wordPairs);
 }
 
-export function handleGeminiError(error: any) {
+export function handleGeminiError(error: unknown) {
   return handleAiServiceError(error, AI_SERVICE_CONFIGS.gemini);
 }

@@ -12,6 +12,17 @@ const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN!,
 });
 
+interface ReplicateOutputItem {
+  url?: () => { toString: () => string };
+  toString: () => string;
+}
+
+interface NotifyCompletionResult {
+  imageUrl: string;
+  originalUrl: string;
+  generatedAt: string;
+}
+
 interface QueueItem {
   id: string;
   entryId: number;
@@ -115,7 +126,7 @@ class ImageGenerationQueue {
         const result = await replicate.wait(prediction);
         
         if (result.status === 'succeeded' && result.output) {
-          await this.handleSuccess(item, result.output);
+          await this.handleSuccess(item, result.output as ReplicateOutputItem[]);
           return; // Success - exit the retry loop
         } else {
           throw new Error(`Prediction failed: ${result.error || 'Unknown error'}`);
@@ -146,14 +157,14 @@ class ImageGenerationQueue {
   }
 
   // Handle successful generation
-  private async handleSuccess(item: QueueItem, output: any) {
+  private async handleSuccess(item: QueueItem, output: ReplicateOutputItem[]) {
     try {
       console.log(`Success: ${item.englishWord} (${item.id})`);
       
       // Get image URL from output
       let imageUrl: string;
       if (Array.isArray(output) && output.length > 0) {
-        const fileOutput = output[0] as any;
+        const fileOutput = output[0];
         imageUrl = fileOutput.url ? fileOutput.url().toString() : fileOutput.toString();
       } else {
         throw new Error('Invalid output format');
@@ -269,7 +280,7 @@ class ImageGenerationQueue {
   }
 
   // Callback methods (to be overridden)
-  protected notifyCompletion(item: QueueItem, result: any) {
+  protected notifyCompletion(item: QueueItem, _result: NotifyCompletionResult) {
     // Override this method to handle completion
     console.log(`✅ Completed: ${item.englishWord}`);
   }
