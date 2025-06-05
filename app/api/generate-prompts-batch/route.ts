@@ -8,16 +8,13 @@ import { getPromptOverride } from '@/lib/promptOverrides';
 import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
 
 export async function POST(request: NextRequest) {
-  // @ts-expect-error - Need to use any for handleApiRequest compatibility
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return handleApiRequest(request, async (_req, body: any) => {
-    const typedBody = body as { entries: BatchPromptEntry[] };
-    const validation = validateRequestArray(typedBody.entries, 'entries');
+  return handleApiRequest(request, async (_req, body: { entries: BatchPromptEntry[] }) => {
+    const validation = validateRequestArray(body.entries, 'entries');
     if (!validation.valid) {
       return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
 
-    const { entries } = typedBody;
+    const { entries } = body;
 
     // Check for overrides first and separate entries
     const overriddenResults: { id: number; prompt: string }[] = [];

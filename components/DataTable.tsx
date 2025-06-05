@@ -184,10 +184,9 @@ export default function DataTable() {
         })),
       }),
       batchApiService: generatePromptsBatchService,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      getSuccessItems: (responseData) => (responseData as { prompts?: any[] }).prompts || [],
-      getErrorItems: () => [], // generatePromptsBatchService doesn't return separate errors array
-      processItemSuccess: (result) => {
+      getSuccessItems: (responseData, batchItems) => responseData.prompts || [],
+      getErrorItems: (responseData) => [], // generatePromptsBatchService doesn't return separate errors array
+      processItemSuccess: (result, originalEntry) => {
         updateEntry(result.id, {
           prompt: result.prompt,
           promptStatus: result.prompt === 'Failed to generate prompt' ? 'error' : 'completed',
@@ -231,11 +230,9 @@ export default function DataTable() {
         })),
       }),
       batchApiService: categorizeVocabularyService,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      getSuccessItems: (responseData) => (responseData as { results?: any[] }).results || [],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      getErrorItems: (responseData) => (responseData as { errors?: any[] }).errors || [],
-      processItemSuccess: (result) => {
+      getSuccessItems: (responseData, batchItems) => responseData.results || [],
+      getErrorItems: (responseData) => responseData.errors || [],
+      processItemSuccess: (result, originalEntry) => {
         updateEntry(result.id, {
           categorization: result.categorization,
           categorizationStatus: 'completed',
@@ -300,16 +297,15 @@ export default function DataTable() {
       }),
       batchApiService: batchGenerateImagesService,
       getSuccessItems: (responseData, batchItems) => {
-        if (!(responseData as { success?: boolean }).success) return [];
-        const errorEntryIds = new Set((responseData as { errors?: { entryId: number }[] }).errors?.map((e: { entryId: number }) => e.entryId) || []);
+        if (!responseData.success) return [];
+        const errorEntryIds = new Set(responseData.errors?.map((e: any) => e.entryId) || []);
         return batchItems.filter(item => !errorEntryIds.has(item.id)).map(item => ({ 
           id: item.id, 
-          serverMessage: (responseData as { message?: string }).message 
+          serverMessage: responseData.message 
         }));
       },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      getErrorItems: (responseData) => (responseData as { errors?: any[] }).errors || [],
-      processItemSuccess: () => {
+      getErrorItems: (responseData) => responseData.errors || [],
+      processItemSuccess: (result, originalEntry) => {
         // Item was successfully queued by the server as part of a batch API call.
         // Status already updated to 'queued' by onStartProcessingItem.
         // activityManager.addActivity('info', `Image for "${originalEntry.original_text}" (ID: ${originalEntry.id}) added to generation queue.`);
@@ -318,8 +314,8 @@ export default function DataTable() {
         if (originalEntry) {
           updateEntry(originalEntry.id, { imageStatus: 'error' });
           activityManager.addActivity('error', `Failed to queue image for "${originalEntry.original_text}" (ID: ${originalEntry.id})`, itemError.error);
-        } else if (typeof itemError === 'object' && itemError !== null && 'entryId' in itemError) {
-          activityManager.addActivity('error', `Failed to queue image for entry ID ${(itemError as { entryId: number }).entryId}`, (itemError as { error: string }).error);
+        } else if ((itemError as any).entryId) {
+          activityManager.addActivity('error', `Failed to queue image for entry ID ${(itemError as any).entryId}`, itemError.error);
         } else {
           activityManager.addActivity('error', 'An item failed to queue for image generation', itemError.error);
         }

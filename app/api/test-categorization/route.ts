@@ -35,6 +35,9 @@ Return JSON:
             maxOutputTokens: 200,
             responseMimeType: 'application/json',
           },
+          thinkingConfig: {
+            includeThoughts: false,
+          },
         });
         
         const result = response.response;

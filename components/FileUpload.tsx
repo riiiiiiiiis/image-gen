@@ -5,6 +5,7 @@ import { useDropzone } from 'react-dropzone';
 import { useAppStore } from '@/store/useAppStore';
 import { JSONImportData, WordEntry } from '@/types';
 import { Upload, AlertCircle } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { activityManager } from './ActivityLog';
 
 export default function FileUpload() {

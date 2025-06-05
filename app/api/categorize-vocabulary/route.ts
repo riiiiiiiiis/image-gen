@@ -136,17 +136,14 @@ async function categorizeEntry(entry: CategorizeRequest['entries'][0]): Promise<
 }
 
 export async function POST(request: NextRequest) {
-  // @ts-expect-error - Complex return type that doesn't fit generic constraints
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return handleApiRequest(request, async (_req, body: any) => {
-    const typedBody = body as CategorizeRequest;
+  return handleApiRequest(request, async (_req, body: CategorizeRequest) => {
     // Validate request
-    const validation = validateRequestArray(typedBody.entries, 'entries');
+    const validation = validateRequestArray(body.entries, 'entries');
     if (!validation.valid) {
       return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
     
-    if (typedBody.entries.length > 10) {
+    if (body.entries.length > 10) {
       return NextResponse.json({ error: 'Invalid request: maximum 10 entries allowed per batch' }, { status: 400 });
     }
     
@@ -156,7 +153,7 @@ export async function POST(request: NextRequest) {
     };
     
     // Process entries in parallel
-    const promises = typedBody.entries.map(async (entry) => {
+    const promises = body.entries.map(async (entry) => {
       try {
         // Update status to processing
         await languageCardRepository.update(entry.id, {

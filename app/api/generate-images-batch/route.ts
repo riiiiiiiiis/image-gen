@@ -9,17 +9,14 @@ interface GenerateImageBatchRequestEntry {
 }
 
 export async function POST(request: NextRequest) {
-  // @ts-expect-error - Need to use any for handleApiRequest compatibility
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return handleApiRequest(request, async (_req, body: any) => {
-    const typedBody = body as { entries: GenerateImageBatchRequestEntry[] };
+  return handleApiRequest(request, async (_req, body: { entries: GenerateImageBatchRequestEntry[] }) => {
     // Input validation
-    const validation = validateRequestArray(typedBody.entries, 'entries');
+    const validation = validateRequestArray(body.entries, 'entries');
     if (!validation.valid) {
       return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
 
-    const { entries } = typedBody;
+    const { entries } = body;
 
     // Initialize counters
     let successfullyQueuedCount = 0;

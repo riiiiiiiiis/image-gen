@@ -17,13 +17,13 @@ interface ReplicateOutputItem {
   toString: () => string;
 }
 
-export interface NotifyCompletionResult {
+interface NotifyCompletionResult {
   imageUrl: string;
   originalUrl: string;
   generatedAt: string;
 }
 
-export interface QueueItem {
+interface QueueItem {
   id: string;
   entryId: number;
   englishWord: string;
@@ -280,7 +280,7 @@ class ImageGenerationQueue {
   }
 
   // Callback methods (to be overridden)
-  protected notifyCompletion(item: QueueItem) {
+  protected notifyCompletion(item: QueueItem, _result: NotifyCompletionResult) {
     // Override this method to handle completion
     console.log(`✅ Completed: ${item.englishWord}`);
   }
