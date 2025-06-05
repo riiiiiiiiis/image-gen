@@ -137,21 +137,36 @@ export const useAppStore = create<AppStore>()((set, get) => ({
       },
       
       loadFromDatabase: async () => {
+        set(state => ({ ...state, isInitialized: false })); // Indicate loading starts
         try {
           const response = await fetch('/api/language-cards');
           if (response.ok) {
-            const entries = await response.json();
-            if (entries.length > 0) {
-              set({ entries, isInitialized: true });
-            } else {
-              set({ isInitialized: true });
-            }
+            let loadedEntries: WordEntry[] = await response.json();
+            const entries = loadedEntries.map(entry => {
+              const updatedEntry = { ...entry };
+              if (updatedEntry.promptStatus === 'generating') {
+                // Prompt generation was interrupted, reset status
+                updatedEntry.promptStatus = 'error'; 
+                console.log(`Resetting stuck promptStatus to 'error' for entry ID ${entry.id}`);
+              }
+              if (updatedEntry.imageStatus === 'processing') {
+                // Single image generation was interrupted, reset status
+                updatedEntry.imageStatus = 'error';
+                console.log(`Resetting stuck imageStatus 'processing' to 'error' for entry ID ${entry.id}`);
+              }
+              // Note: 'queued' status (typically from batch operations) is left as is.
+              // The server-side queue is in-memory, so these might also be stale after a server restart.
+              // A more advanced system might involve checking job statuses against the server if the queue were persistent.
+              return updatedEntry;
+            });
+            set({ entries, isInitialized: true });
           } else {
-            set({ isInitialized: true });
+            console.error('Failed to load from database, server responded with an error:', response.status);
+            set({ entries: [], isInitialized: true }); // Initialize with empty on server error, but mark as done
           }
         } catch (error) {
-          console.error('Failed to load from database:', error);
-          set({ isInitialized: true });
+          console.error('Failed to load from database (network error or JSON parsing issue):', error);
+          set({ entries: [], isInitialized: true }); // Initialize with empty on catch, but mark as done
         }
       },
     }));

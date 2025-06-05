@@ -50,6 +50,8 @@ app/
       route.ts
     generate-image/
       route.ts
+    generate-images-batch/
+      route.ts
     generate-prompt/
       route.ts
     generate-prompts-batch/
@@ -69,6 +71,7 @@ app/
 components/
   ActivityLog.tsx
   ASCIILogo.tsx
+  BatchActionMenu.tsx
   DataTable.tsx
   DemoButton.tsx
   FileUpload.tsx
@@ -85,12 +88,17 @@ lib/
     repository.ts
     runMigrations.ts
     schema.ts
+  aiUtils.ts
   apiClient.ts
+  apiUtils.ts
   batchUtils.ts
   gemini.ts
   imageQueue.ts
+  imageUtils.ts
   openrouter.server.ts
   openrouter.ts
+  paths.ts
+  promptOverrides.ts
   replicateConfig.ts
 public/
   file.svg
@@ -111,6 +119,7 @@ next.config.ts
 nodemon.json
 package.json
 postcss.config.mjs
+prompt_overrides.yaml
 README.md
 tsconfig.json
 </directory_structure>
@@ -135,164 +144,392 @@ This section contains the contents of the repository's files.
 }
 </file>
 
-<file path="lib/openrouter.server.ts">
-// Server-only OpenRouter integration
-// This file should never be imported client-side
+<file path="components/BatchActionMenu.tsx">
+'use client';
 
-export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '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';
-export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
-export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-preview-05-20';
+import React, { useState, useRef, useEffect } from 'react';
 
-export interface OpenRouterMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+export interface BatchActionMenuProps {
+  triggerButtonLabel: string;
+  triggerButtonIcon: React.ReactNode;
+  menuTitle: string;
+  countInputState: [string, (value: string) => void];
+  onCustomCountAction: (count: number) => void;
+  customCountActionLabel: (count: string) => string;
+  onAllEligibleAction?: () => void;
+  allEligibleActionLabel?: string;
+  getEligibleCount?: () => number;
+  className?: string;
 }
 
-interface OpenRouterRequest {
-  model: string;
-  messages: OpenRouterMessage[];
-  temperature?: number;
-  max_tokens?: number;
-  response_format?: { type: 'json_object' };
+export function BatchActionMenu({
+  triggerButtonLabel,
+  triggerButtonIcon,
+  menuTitle,
+  countInputState,
+  onCustomCountAction,
+  customCountActionLabel,
+  onAllEligibleAction,
+  allEligibleActionLabel,
+  getEligibleCount,
+  className = ''
+}: BatchActionMenuProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [customCount, setCustomCount] = countInputState;
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Handle click outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  const handleCustomAction = () => {
+    const count = parseInt(customCount, 10);
+    if (count > 0) {
+      onCustomCountAction(count);
+      setIsOpen(false);
+    }
+  };
+
+  const handleAllEligibleAction = () => {
+    if (onAllEligibleAction) {
+      onAllEligibleAction();
+      setIsOpen(false);
+    }
+  };
+
+  return (
+    <div className={`relative ${className}`} ref={menuRef}>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="btn-primary flex items-center gap-2"
+      >
+        {triggerButtonIcon}
+        {triggerButtonLabel}
+      </button>
+      
+      {isOpen && (
+        <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
+          <div className="p-2">
+            <div className="mb-2">
+              <div className="text-xs text-gray-400 mb-1">{menuTitle}</div>
+              <input
+                type="number"
+                value={customCount}
+                onChange={(e) => setCustomCount(e.target.value)}
+                placeholder="Number of items"
+                className="input-field w-full text-sm px-3 py-2"
+                min="1"
+                aria-label={menuTitle}
+              />
+              <button
+                onClick={handleCustomAction}
+                disabled={!customCount || parseInt(customCount, 10) <= 0}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-1"
+              >
+                {customCountActionLabel(customCount)}
+              </button>
+            </div>
+            
+            {onAllEligibleAction && allEligibleActionLabel && (
+              <>
+                <div className="border-t border-gray-700 my-2"></div>
+                <button
+                  onClick={handleAllEligibleAction}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
+                >
+                  {allEligibleActionLabel}
+                  {getEligibleCount && (
+                    <span> ({getEligibleCount()})</span>
+                  )}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+</file>
+
+<file path="lib/aiUtils.ts">
+export interface AiErrorDetail {
+  message: string;
+  status: number;
 }
 
-export async function callOpenRouter(
-  messages: OpenRouterMessage[],
-  options: Partial<OpenRouterRequest> = {}
-): Promise<string> {
-  const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://github.com/sdxl-emoji-pipeline',
-      'X-Title': 'SDXL Emoji Pipeline'
-    },
-    body: JSON.stringify({
-      model: OPENROUTER_MODEL,
-      messages,
-      temperature: 0.1,
-      response_format: { type: 'json_object' },
-      ...options
-    })
-  });
+export interface AiServiceErrorConfig {
+  serviceName: string;
+  apiKeyEnvVar: string;
+  apiKeyErrorSubstrings: string[];
+  rateLimitErrorSubstrings: string[];
+  modelNotFoundErrorSubstrings: string[];
+}
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.error?.message || 
-      `OpenRouter API error: ${response.status} ${response.statusText}`
-    );
+// Predefined configurations for common AI services
+export const AI_SERVICE_CONFIGS = {
+  gemini: {
+    serviceName: 'Gemini',
+    apiKeyEnvVar: 'GEMINI_API_KEY',
+    apiKeyErrorSubstrings: ['API_KEY_INVALID', 'Invalid API key'],
+    rateLimitErrorSubstrings: ['RATE_LIMIT_EXCEEDED', 'quota'],
+    modelNotFoundErrorSubstrings: ['not found', '404']
+  },
+  openrouter: {
+    serviceName: 'OpenRouter',
+    apiKeyEnvVar: 'OPENROUTER_API_KEY',
+    apiKeyErrorSubstrings: ['Invalid API key', 'Unauthorized'],
+    rateLimitErrorSubstrings: ['Rate limit'],
+    modelNotFoundErrorSubstrings: ['Model not found']
   }
+} as const;
 
-  const data = await response.json();
-  return data.choices[0].message.content;
-}
-
-// Batch prompt generation constants and interfaces
-export const BATCH_PROMPT_GENERATION_INSTRUCTIONS = `
-For each word below, generate ONE emoji object following these rules:
-
-1. Object MUST visually represent the word's meaning
-2. Maximum 4 words
-3. Single object only
-4. Choose most memorable/iconic association
-5. If describing people, use light-skinned or yellow emoji-style characters
-6. FORBIDDEN: "vibrant", "representing", "showing", generic descriptions
-
-Think: What visual helps remember this word?
-
-Examples:
-"autumn" → "orange fall leaf" (NOT green leaf)
-"winter" → "snowflake" (NOT generic season)
-"happy" → "smiling face"
-"article" → "newspaper"
-"above" → "upward arrow"
-"actor" → "light-skinned man in suit"
-`;
-
-// This interface matches the structure of items in GeneratePromptsBatchPayload entries from lib/apiClient.ts
-export interface BatchPromptEntry {
-  id: number;
-  english: string;
-  russian: string;
-  transcription: string;
-}
-
-// Function to format batch prompt messages for OpenRouter
-export function formatOpenRouterBatchPromptMessages(entries: BatchPromptEntry[]): OpenRouterMessage[] {
-  const wordPairs = entries
-    .map(
-      (entry) =>
-        `ID: ${entry.id}\nEnglish: ${entry.english} ${entry.transcription}\nRussian: ${entry.russian}`
-    )
-    .join('\n\n');
-
-  const systemMessage = `You are an AI assistant. For each word pair, generate a concise visual prompt for an emoji-style image.
-Return your response as a JSON array where each object has an "id" field matching the input id and a "prompt" field with the single object description.
-Output only valid JSON, no markdown formatting. The "prompt" should adhere to the rules provided in the user message.
-Example format: [{"id": 1, "prompt": "orange fall leaf"}, {"id": 2, "prompt": "snowflake"}]`;
-
-  const userMessageContent = `${BATCH_PROMPT_GENERATION_INSTRUCTIONS}
-
-Word pairs:
-${wordPairs}
-
-Return valid JSON only, no markdown formatting.`;
-
-  return [
-    { role: 'system', content: systemMessage },
-    { role: 'user', content: userMessageContent },
-  ];
-}
-
-export function handleOpenRouterError(error: unknown) {
-  console.error('OpenRouter API Error:', error);
+export function handleAiServiceError(
+  error: any,
+  config: AiServiceErrorConfig
+): AiErrorDetail {
+  console.error(`${config.serviceName} API Error:`, error);
   
   const errorMessage = error instanceof Error ? error.message : String(error);
   
-  if (errorMessage.includes('Invalid API key') || errorMessage.includes('Unauthorized')) {
+  // Check for API key errors
+  if (config.apiKeyErrorSubstrings.some(substring => errorMessage.includes(substring))) {
     return {
-      message: 'Invalid API key. Please check your OPENROUTER_API_KEY.',
+      message: `Invalid API key. Please check your ${config.apiKeyEnvVar} in .env.local`,
       status: 401
     };
   }
   
-  if (errorMessage.includes('Rate limit')) {
+  // Check for rate limit errors
+  if (config.rateLimitErrorSubstrings.some(substring => errorMessage.includes(substring))) {
     return {
-      message: 'Rate limit exceeded. Please try again later.',
+      message: `Rate limit exceeded for ${config.serviceName}. Please try again later.`,
       status: 429
     };
   }
   
-  if (errorMessage.includes('Model not found')) {
+  // Check for model not found errors
+  if (config.modelNotFoundErrorSubstrings.some(substring => errorMessage.includes(substring))) {
     return {
-      message: 'Model not available. Please check the model name.',
+      message: `${config.serviceName} model not available. Please check the model configuration.`,
       status: 404
     };
   }
   
+  // Default error
   return {
-    message: errorMessage || 'Failed to call OpenRouter API',
+    message: errorMessage || `Failed to call ${config.serviceName} API.`,
     status: 500
   };
 }
 </file>
 
-<file path="app/api/gallery/route.ts">
-import { NextResponse } from 'next/server';
+<file path="lib/apiUtils.ts">
+import { NextRequest, NextResponse } from 'next/server';
+
+type ApiHandler<T = any, U = any> = (request: NextRequest, body?: T) => Promise<NextResponse<U>>;
+
+export interface ApiRequestOptions {
+  parseBody?: boolean;
+}
+
+export async function handleApiRequest<T = any, U = any>(
+  request: NextRequest,
+  handler: ApiHandler<T, U>,
+  options: ApiRequestOptions = { parseBody: true }
+): Promise<NextResponse<U | { error: string }>> {
+  try {
+    let body: T | undefined;
+    
+    if ((request.method === 'POST' || request.method === 'PATCH' || request.method === 'PUT') && options.parseBody) {
+      try {
+        body = await request.json();
+      } catch (e) {
+        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+      }
+    }
+    
+    return await handler(request, body);
+  } catch (error: any) {
+    console.error(`API Error in ${request.url}:`, error);
+    
+    // If error is already a NextResponse, return it
+    if (error instanceof Response) {
+      return error as NextResponse;
+    }
+    
+    // Extract status and message from error if available
+    const status = error.status || 500;
+    const message = error.message || 'Internal Server Error';
+    
+    // If error object has an explicit error field, use it
+    if (error.error) {
+      return NextResponse.json({ error: error.error }, { status });
+    }
+    
+    return NextResponse.json({ error: message }, { status });
+  }
+}
+
+// Validation utilities
+export function validateRequestBody<T>(body: any, requiredFields: (keyof T)[]): { valid: boolean; error?: string; status?: number } {
+  if (!body) {
+    return { valid: false, error: 'Request body is missing.', status: 400 };
+  }
+  
+  for (const field of requiredFields) {
+    const value = body[field];
+    if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
+      return { valid: false, error: `Missing required field: ${String(field)}`, status: 400 };
+    }
+  }
+  
+  return { valid: true };
+}
+
+export function validateRequestArray<T>(array: any, itemName: string = 'entries'): { valid: boolean; error?: string; status?: number } {
+  if (!array || !Array.isArray(array)) {
+    return { valid: false, error: `Missing or invalid "${itemName}" array.`, status: 400 };
+  }
+  
+  if (array.length === 0) {
+    return { valid: false, error: `"${itemName}" array cannot be empty.`, status: 400 };
+  }
+  
+  return { valid: true };
+}
+</file>
+
+<file path="lib/imageUtils.ts">
 import fs from 'fs';
 import path from 'path';
+import sharp from 'sharp';
+import { IMAGES_DIR_PATH } from './paths';
 
-const GALLERY_PATH = path.join(process.cwd(), 'data', 'gallery.json');
-const IMAGES_DIR = path.join(process.cwd(), 'public', 'images');
+export interface ImageSaveOptions {
+  resize?: {
+    width: number;
+    height: number;
+    fit: 'cover' | 'contain' | 'fill' | 'inside' | 'outside';
+    position?: string;
+  };
+}
 
-export async function GET() {
-  try {
+export interface ImageSaveResult {
+  localImageUrl: string;
+  originalUrl: string;
+  localPath: string;
+  filename: string;
+}
+
+export async function saveImageFromUrl(
+  imageUrl: string,
+  entryId: number,
+  options?: ImageSaveOptions
+): Promise<ImageSaveResult> {
+  console.log('Downloading image from:', imageUrl);
+  
+  // Fetch the image
+  const response = await fetch(imageUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image: ${response.statusText}`);
+  }
+  
+  const imageBuffer = await response.arrayBuffer();
+  let buffer = Buffer.from(imageBuffer);
+  
+  // Apply resizing if requested
+  if (options?.resize) {
+    try {
+      const { width, height, fit, position = 'center' } = options.resize;
+      console.log(`Resizing image ${entryId} to ${width}x${height}...`);
+      
+      buffer = await sharp(buffer)
+        .resize(width, height, {
+          fit,
+          position: position as any
+        })
+        .png() // Ensure PNG output format
+        .toBuffer();
+      
+      console.log(`Image ${entryId} successfully resized to ${width}x${height}.`);
+    } catch (resizeError) {
+      console.error(`Error resizing image ${entryId}:`, resizeError);
+      throw new Error(
+        `Failed to resize image ${entryId}: ${
+          resizeError instanceof Error ? resizeError.message : String(resizeError)
+        }`
+      );
+    }
+  }
+  
+  // Create images directory if it doesn't exist
+  if (!fs.existsSync(IMAGES_DIR_PATH)) {
+    fs.mkdirSync(IMAGES_DIR_PATH, { recursive: true });
+  }
+  
+  // Use entry ID as filename - simple and unique
+  const filename = `${entryId}.png`;
+  const filepath = path.join(IMAGES_DIR_PATH, filename);
+  
+  // Save the file
+  fs.writeFileSync(filepath, buffer);
+  console.log('Image saved to:', filepath);
+  
+  // Return both the original URL and the local path with cache-busting timestamp
+  const timestamp = Date.now();
+  const localImageUrl = `/images/${filename}?t=${timestamp}`;
+  
+  return {
+    localImageUrl,
+    originalUrl: imageUrl,
+    localPath: filepath,
+    filename
+  };
+}
+</file>
+
+<file path="lib/paths.ts">
+import path from 'path';
+
+// Base directories
+export const CWD = process.cwd();
+export const DATA_DIR = path.join(CWD, 'data');
+export const PUBLIC_DIR = path.join(CWD, 'public');
+
+// Common file paths
+export const GALLERY_JSON_PATH = path.join(DATA_DIR, 'gallery.json');
+export const IMAGES_DIR_PATH = path.join(PUBLIC_DIR, 'images');
+export const PROMPT_OVERRIDES_YAML_PATH = path.join(CWD, 'prompt_overrides.yaml');
+export const DATABASE_FILE_PATH = path.join(DATA_DIR, 'language-cards.db');
+</file>
+
+<file path="app/api/gallery/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
+import { handleApiRequest } from '@/lib/apiUtils';
+import { GALLERY_JSON_PATH, IMAGES_DIR_PATH } from '@/lib/paths';
+
+export async function GET(request: NextRequest) {
+  return handleApiRequest(request, async () => {
     // Read gallery JSON
     let galleryData;
-    if (fs.existsSync(GALLERY_PATH)) {
-      const fileContent = fs.readFileSync(GALLERY_PATH, 'utf8');
+    if (fs.existsSync(GALLERY_JSON_PATH)) {
+      const fileContent = fs.readFileSync(GALLERY_JSON_PATH, 'utf8');
       galleryData = JSON.parse(fileContent);
     } else {
       // Auto-generate from existing images
@@ -300,14 +537,11 @@ export async function GET() {
     }
 
     return NextResponse.json(galleryData);
-  } catch (error) {
-    console.error('Error reading gallery:', error);
-    return NextResponse.json({ error: 'Failed to load gallery' }, { status: 500 });
-  }
+  }, { parseBody: false });
 }
 
 async function generateGalleryFromImages() {
-  const imageFiles = fs.readdirSync(IMAGES_DIR)
+  const imageFiles = fs.readdirSync(IMAGES_DIR_PATH)
     .filter(file => /\.(png|jpg|jpeg|webp)$/i.test(file))
     .map(filename => {
       const nameWithoutExt = path.parse(filename).name;
@@ -337,77 +571,94 @@ async function generateGalleryFromImages() {
   };
 
   // Save generated data
-  fs.writeFileSync(GALLERY_PATH, JSON.stringify(galleryData, null, 2));
+  fs.writeFileSync(GALLERY_JSON_PATH, JSON.stringify(galleryData, null, 2));
   return galleryData;
 }
 </file>
 
-<file path="app/api/generate-prompts-batch/route.ts">
-import { NextResponse } from 'next/server';
-import {
-  callOpenRouter,
-  handleOpenRouterError,
-  formatOpenRouterBatchPromptMessages,
-  BatchPromptEntry,
-} from '@/lib/openrouter';
+<file path="app/api/generate-images-batch/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { imageQueue } from '@/lib/imageQueue';
+import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
 
-export async function POST(request: Request) {
-  try {
-    const { entries }: { entries: BatchPromptEntry[] } = await request.json();
+interface GenerateImageBatchRequestEntry {
+  entryId: number;
+  prompt: string;
+  englishWord: string;
+}
 
-    if (!entries || !Array.isArray(entries) || entries.length === 0) {
-      return NextResponse.json(
-        { error: 'Missing or invalid entries array' },
-        { status: 400 }
-      );
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { entries: GenerateImageBatchRequestEntry[] }) => {
+    // Input validation
+    const validation = validateRequestArray(body.entries, 'entries');
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
 
-    const messages = formatOpenRouterBatchPromptMessages(entries);
+    const { entries } = body;
 
-    const rawResponseContent = await callOpenRouter(messages);
+    // Initialize counters
+    let successfullyQueuedCount = 0;
+    let failedToQueueCount = 0;
+    const itemErrors: Array<{ entryId: number; error: string }> = [];
 
-    console.log('Raw OpenRouter response content:', rawResponseContent);
+    // Process each entry
+    for (const entry of entries) {
+      // Validate each item
+      if (!entry.entryId || !entry.prompt || !entry.prompt.trim() || !entry.englishWord) {
+        failedToQueueCount++;
+        itemErrors.push({
+          entryId: entry.entryId || -1,
+          error: 'Missing entryId, prompt, or englishWord.'
+        });
+        console.warn(`Skipping invalid entry in batch image generation: ${JSON.stringify(entry)}`);
+        continue;
+      }
 
-    // The content from callOpenRouter should be a stringified JSON if response_format is json_object
-    const responseText = typeof rawResponseContent === 'string' ? rawResponseContent : JSON.stringify(rawResponseContent);
+      try {
+        await imageQueue.addToQueue(entry.entryId, entry.englishWord, entry.prompt);
+        successfullyQueuedCount++;
+      } catch (queueError) {
+        console.error(`Error adding entry ${entry.entryId} to imageQueue:`, queueError);
+        failedToQueueCount++;
+        itemErrors.push({
+          entryId: entry.entryId,
+          error: queueError instanceof Error ? queueError.message : 'Failed to add to internal queue.'
+        });
+      }
+    }
 
-    let prompts;
-    try {
-      // Remove any markdown code blocks if present (good safeguard)
-      const cleanedText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      prompts = JSON.parse(cleanedText);
-    } catch (parseError) {
-      console.error('Failed to parse OpenRouter response:', parseError);
-      console.error('Response text from AI:', responseText);
+    // Prepare response
+    let responseMessage: string;
+    
+    if (failedToQueueCount > 0 && successfullyQueuedCount === 0) {
+      responseMessage = `Failed to queue all ${failedToQueueCount} images.`;
       return NextResponse.json(
-        { error: 'Failed to parse AI response' },
+        {
+          success: false,
+          message: responseMessage,
+          queuedCount: successfullyQueuedCount,
+          errorCount: failedToQueueCount,
+          errors: itemErrors
+        },
         { status: 500 }
       );
     }
 
-    if (!Array.isArray(prompts)) {
-      console.error('Invalid response format from AI. Expected array, got:', prompts);
-      return NextResponse.json(
-        { error: 'Invalid response format from AI' },
-        { status: 500 }
-      );
+    responseMessage = `Successfully queued ${successfullyQueuedCount} images for generation.`;
+    if (failedToQueueCount > 0) {
+      responseMessage += ` Failed to queue ${failedToQueueCount} images.`;
     }
 
-    const promptMap = new Map(prompts.map((p: { id: number; prompt: string }) => [p.id, p.prompt]));
+    return NextResponse.json({
+      success: true,
+      message: responseMessage,
+      queuedCount: successfullyQueuedCount,
+      errorCount: failedToQueueCount,
+      errors: itemErrors.length > 0 ? itemErrors : undefined
+    });
 
-    const results = entries.map(entry => ({
-      id: entry.id,
-      prompt: promptMap.get(entry.id) || 'Failed to generate prompt',
-    }));
-
-    return NextResponse.json({ prompts: results });
-  } catch (error: unknown) {
-    const errorInfo = handleOpenRouterError(error);
-    return NextResponse.json(
-      { error: errorInfo.message },
-      { status: errorInfo.status }
-    );
-  }
+  });
 }
 </file>
 
@@ -415,169 +666,46 @@ export async function POST(request: Request) {
 import { NextRequest, NextResponse } from 'next/server';
 import { languageCardRepository } from '@/lib/db/repository';
 import { WordEntry } from '@/types';
+import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
 
-export async function GET() {
-  try {
+export async function GET(request: NextRequest) {
+  return handleApiRequest(request, async () => {
     const entries = await languageCardRepository.findAll();
     return NextResponse.json(entries);
-  } catch (error) {
-    console.error('Error fetching language cards:', error);
-    return NextResponse.json({ error: 'Failed to fetch language cards' }, { status: 500 });
-  }
+  }, { parseBody: false });
 }
 
 export async function POST(request: NextRequest) {
-  try {
-    const entries: WordEntry[] = await request.json();
-    await languageCardRepository.bulkUpsert(entries);
+  return handleApiRequest(request, async (_req, body: WordEntry[]) => {
+    if (!Array.isArray(body)) {
+      return NextResponse.json({ error: 'Request body must be an array of entries' }, { status: 400 });
+    }
+    
+    await languageCardRepository.bulkUpsert(body);
     return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Error saving language cards:', error);
-    return NextResponse.json({ error: 'Failed to save language cards' }, { status: 500 });
-  }
+  });
 }
 
 export async function PATCH(request: NextRequest) {
-  try {
-    const { id, updates } = await request.json();
-    await languageCardRepository.update(id, updates);
+  return handleApiRequest(request, async (_req, body: { id: number; updates: Partial<WordEntry> }) => {
+    const validation = validateRequestBody(body, ['id', 'updates']);
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
+    }
+    
+    await languageCardRepository.update(body.id, body.updates);
     return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Error updating language card:', error);
-    return NextResponse.json({ error: 'Failed to update language card' }, { status: 500 });
-  }
-}
-</file>
-
-<file path="app/api/queue-image/route.ts">
-import { NextResponse } from 'next/server';
-import { imageQueue } from '@/lib/imageQueue';
-
-// In-memory storage for completion callbacks
-const completionCallbacks = new Map<string, (result: any) => void>();
-const errorCallbacks = new Map<string, (error: string) => void>();
-
-// Override queue methods to handle notifications
-class ExtendedImageQueue extends (imageQueue.constructor as any) {
-  protected notifyCompletion(item: any, result: any) {
-    const callback = completionCallbacks.get(item.id);
-    if (callback) {
-      callback(result);
-      completionCallbacks.delete(item.id);
-    }
-  }
-
-  protected notifyError(item: any, error: string) {
-    const errorCallback = errorCallbacks.get(item.id);
-    if (errorCallback) {
-      errorCallback(error);
-      errorCallbacks.delete(item.id);
-    }
-  }
-}
-
-// Replace the queue instance methods
-Object.setPrototypeOf(imageQueue, ExtendedImageQueue.prototype);
-
-export async function POST(request: Request) {
-  try {
-    const { action, ...data } = await request.json();
-
-    switch (action) {
-      case 'add':
-        return handleAddToQueue(data);
-      case 'status':
-        return handleGetStatus();
-      case 'items':
-        return handleGetItems();
-      default:
-        return NextResponse.json(
-          { error: 'Invalid action' },
-          { status: 400 }
-        );
-    }
-  } catch (error: any) {
-    console.error('Queue API error:', error);
-    return NextResponse.json(
-      { error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
-
-async function handleAddToQueue(data: any) {
-  const { entryId, englishWord, prompt } = data;
-
-  console.log(`API: Adding to queue - entryId: ${entryId}, word: ${englishWord}`);
-
-  if (!entryId || !englishWord || !prompt) {
-    console.log('API: Missing required fields:', { entryId, englishWord, prompt: !!prompt });
-    return NextResponse.json(
-      { error: 'Missing required fields: entryId, englishWord, prompt' },
-      { status: 400 }
-    );
-  }
-
-  try {
-    // Add to queue
-    console.log(`API: Adding to imageQueue...`);
-    const queueId = await imageQueue.addToQueue(entryId, englishWord, prompt);
-    console.log(`API: Added to queue with ID: ${queueId}`);
-
-    // Create a promise that resolves when the image is generated
-    const resultPromise = new Promise<any>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        completionCallbacks.delete(queueId);
-        errorCallbacks.delete(queueId);
-        reject(new Error('Generation timeout'));
-      }, 300000); // 5 minute timeout
-
-      completionCallbacks.set(queueId, (result) => {
-        clearTimeout(timeout);
-        resolve(result);
-      });
-
-      errorCallbacks.set(queueId, (error) => {
-        clearTimeout(timeout);
-        reject(new Error(error));
-      });
-    });
-
-    // Wait for completion
-    const result = await resultPromise;
-
-    return NextResponse.json({
-      queueId,
-      status: 'completed',
-      ...result,
-    });
-
-  } catch (error: any) {
-    console.error('Error adding to queue:', error);
-    return NextResponse.json(
-      { error: error.message || 'Failed to generate image' },
-      { status: 500 }
-    );
-  }
-}
-
-async function handleGetStatus() {
-  const status = imageQueue.getQueueStatus();
-  return NextResponse.json(status);
-}
-
-async function handleGetItems() {
-  const items = imageQueue.getQueueItems();
-  return NextResponse.json({ items });
+  });
 }
 </file>
 
 <file path="app/api/test-categorization/route.ts">
 import { NextRequest, NextResponse } from 'next/server';
 import { getGeminiModel } from '@/lib/gemini';
+import { handleApiRequest } from '@/lib/apiUtils';
 
-export async function GET() {
-  try {
+export async function GET(request: NextRequest) {
+  return handleApiRequest(request, async () => {
     const testWords = [
       { id: 1, original_text: 'a, an', translation_text: 'неопределенный артикль', level_id: 66 },
       { id: 2, original_text: 'about', translation_text: 'о, около, приблизительно, почти', level_id: 66 }
@@ -637,18 +765,17 @@ Return JSON:
     }
     
     return NextResponse.json({ results });
-  } catch (error) {
-    return NextResponse.json({ error: 'Test failed', details: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
-  }
+  }, { parseBody: false });
 }
 </file>
 
 <file path="app/api/test-gemini/route.ts">
 import { NextRequest, NextResponse } from 'next/server';
-import { getGeminiModel, handleGeminiError } from '@/lib/gemini';
+import { getGeminiModel } from '@/lib/gemini';
+import { handleApiRequest } from '@/lib/apiUtils';
 
-export async function GET() {
-  try {
+export async function GET(request: NextRequest) {
+  return handleApiRequest(request, async () => {
     // Check if API key exists
     if (!process.env.GEMINI_API_KEY) {
       return NextResponse.json({ 
@@ -685,16 +812,7 @@ export async function GET() {
       response: text,
       apiKeySet: true,
     });
-  } catch (error) {
-    console.error('Gemini test error:', error);
-    const errorInfo = handleGeminiError(error);
-    
-    return NextResponse.json({
-      status: 'error',
-      error: errorInfo.message,
-      details: error instanceof Error ? error.message : 'Unknown error',
-    }, { status: errorInfo.status });
-  }
+  }, { parseBody: false });
 }
 </file>
 
@@ -936,109 +1054,6 @@ export default function DemoButton() {
     >
       Demo Activity Log
     </button>
-  );
-}
-</file>
-
-<file path="components/QueueStatus.tsx">
-'use client';
-
-import { useState, useEffect } from 'react';
-import { Clock, CheckCircle, XCircle, Loader } from 'lucide-react';
-
-interface QueueStatus {
-  total: number;
-  pending: number;
-  processing: number;
-  completed: number;
-  errors: number;
-  isProcessing: boolean;
-}
-
-export default function QueueStatus() {
-  const [status, setStatus] = useState<QueueStatus | null>(null);
-  const [isVisible, setIsVisible] = useState(false);
-
-  const fetchStatus = async () => {
-    try {
-      const response = await fetch('/api/queue-image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'status' }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setStatus(data);
-        setIsVisible(data.total > 0);
-      }
-    } catch (error) {
-      console.error('Failed to fetch queue status:', error);
-    }
-  };
-
-  useEffect(() => {
-    // Initial fetch
-    fetchStatus();
-
-    // Poll every 2 seconds
-    const interval = setInterval(fetchStatus, 2000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  if (!isVisible || !status) {
-    return null;
-  }
-
-  return (
-    <div className="fixed bottom-4 right-4 bg-gray-900 border border-gray-700 rounded-lg p-4 shadow-lg min-w-64 z-50">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-medium text-gray-100">Image Queue</h3>
-        <button
-          onClick={() => setIsVisible(false)}
-          className="text-gray-400 hover:text-gray-300"
-        >
-          ×
-        </button>
-      </div>
-
-      <div className="space-y-2">
-        {status.pending > 0 && (
-          <div className="flex items-center gap-2 text-xs">
-            <Clock className="h-3 w-3 text-yellow-500" />
-            <span className="text-gray-300">Pending: {status.pending}</span>
-          </div>
-        )}
-
-        {status.processing > 0 && (
-          <div className="flex items-center gap-2 text-xs">
-            <Loader className="h-3 w-3 text-blue-500 animate-spin" />
-            <span className="text-gray-300">Processing: {status.processing}</span>
-          </div>
-        )}
-
-        {status.completed > 0 && (
-          <div className="flex items-center gap-2 text-xs">
-            <CheckCircle className="h-3 w-3 text-green-500" />
-            <span className="text-gray-300">Completed: {status.completed}</span>
-          </div>
-        )}
-
-        {status.errors > 0 && (
-          <div className="flex items-center gap-2 text-xs">
-            <XCircle className="h-3 w-3 text-red-500" />
-            <span className="text-gray-300">Errors: {status.errors}</span>
-          </div>
-        )}
-
-        <div className="pt-2 border-t border-gray-700">
-          <div className="text-xs text-gray-400">
-            Total: {status.total} {status.isProcessing ? '(Active)' : '(Idle)'}
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 </file>
@@ -1465,358 +1480,85 @@ export async function runMigrations() {
 }
 </file>
 
-<file path="lib/apiClient.ts">
-import { WordEntry, CategorizationResult } from '@/types';
+<file path="lib/openrouter.server.ts">
+// Server-only OpenRouter integration
+// This file should never be imported client-side
 
-// Generic API response type
-export interface ApiResponse<T = any> {
-  data?: T;
-  error?: string;
-  status: number;
-}
+import { handleAiServiceError, AI_SERVICE_CONFIGS } from './aiUtils';
 
-// Request payload types
-export interface GeneratePromptPayload {
-  english: string;
-  russian: string;
-  transcription: string;
-}
-
-export interface QueueImagePayload {
-  action: 'add';
-  entryId: number;
-  englishWord: string;
-  prompt: string;
-}
-
-export interface GeneratePromptsBatchPayload {
-  entries: Array<{
-    id: number;
-    english: string;
-    russian: string;
-    transcription: string;
-  }>;
-}
-
-export interface CategorizeVocabularyPayload {
-  entries: Array<{
-    id: number;
-    original_text: string;
-    translation_text: string;
-    level_id: number;
-  }>;
-}
-
-export interface RegenerateImagePayload {
-  entryId: number;
-  prompt: string;
-}
-
-export interface LanguageCardsPayload {
-  word: string;
-}
-
-// Response types
-export interface GeneratePromptResponse {
-  prompt: string;
-}
-
-export interface QueueImageResponse {
-  status: string;
-  imageUrl?: string;
-  generatedAt?: string;
-}
-
-export interface GeneratePromptsBatchResponse {
-  prompts: Array<{
-    id: number;
-    prompt: string;
-  }>;
-}
-
-export interface CategorizeVocabularyResponse {
-  results: Array<{
-    id: number;
-    categorization: CategorizationResult;
-  }>;
-  errors: Array<{
-    id: number;
-    error: string;
-  }>;
-}
-
-export interface RegenerateImageResponse {
-  success: boolean;
-  imageUrl?: string;
-  generatedAt?: string;
-  error?: string;
-}
-
-export interface LanguageCardsResponse {
-  cards: WordEntry[];
-  totalWords: number;
-}
-
-// Generic API call utility
-async function apiCall<T>(
-  endpoint: string,
-  options: {
-    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
-    body?: any;
-  } = {}
-): Promise<ApiResponse<T>> {
-  const { method = 'GET', body } = options;
-
-  try {
-    const response = await fetch(endpoint, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      ...(body && { body: JSON.stringify(body) }),
-    });
-
-    const status = response.status;
-
-    if (!response.ok) {
-      // Try to parse error message from response
-      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-      return {
-        error: errorData.error || `HTTP ${status}`,
-        status,
-      };
-    }
-
-    const data = await response.json();
-    return {
-      data,
-      status,
-    };
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : 'Network error',
-      status: 0,
-    };
-  }
-}
-
-// Service functions
-export async function generatePromptService(
-  payload: GeneratePromptPayload
-): Promise<ApiResponse<GeneratePromptResponse>> {
-  return apiCall<GeneratePromptResponse>('/api/generate-prompt', {
-    method: 'POST',
-    body: payload,
-  });
-}
-
-export async function queueImageService(
-  payload: QueueImagePayload
-): Promise<ApiResponse<QueueImageResponse>> {
-  return apiCall<QueueImageResponse>('/api/queue-image', {
-    method: 'POST',
-    body: payload,
-  });
-}
-
-export async function generatePromptsBatchService(
-  payload: GeneratePromptsBatchPayload
-): Promise<ApiResponse<GeneratePromptsBatchResponse>> {
-  return apiCall<GeneratePromptsBatchResponse>('/api/generate-prompts-batch', {
-    method: 'POST',
-    body: payload,
-  });
-}
-
-export async function categorizeVocabularyService(
-  payload: CategorizeVocabularyPayload
-): Promise<ApiResponse<CategorizeVocabularyResponse>> {
-  return apiCall<CategorizeVocabularyResponse>('/api/categorize-vocabulary', {
-    method: 'POST',
-    body: payload,
-  });
-}
-
-export async function regenerateImageService(
-  payload: RegenerateImagePayload
-): Promise<ApiResponse<RegenerateImageResponse>> {
-  return apiCall<RegenerateImageResponse>('/api/generate-image', {
-    method: 'POST',
-    body: payload,
-  });
-}
-
-export async function fetchLanguageCardsService(
-  payload: LanguageCardsPayload
-): Promise<ApiResponse<LanguageCardsResponse>> {
-  return apiCall<LanguageCardsResponse>(`/api/language-cards?word=${encodeURIComponent(payload.word)}`, {
-    method: 'GET',
-  });
-}
-</file>
-
-<file path="lib/batchUtils.ts">
-import { WordEntry } from '@/types';
-import { ApiResponse } from './apiClient';
-import { activityManager } from '@/components/ActivityLog';
-
-export interface BatchProcessorConfig<TPayload, TResult, TError> {
-  itemsToProcess: WordEntry[];
-  batchSize: number;
-  delayBetweenBatchesMs: number;
-  operationName: string;
-  getBatchPayload: (batch: WordEntry[]) => TPayload;
-  batchApiService: (payload: TPayload) => Promise<ApiResponse<any>>;
-  getSuccessItems: (responseData: any) => TResult[];
-  getErrorItems: (responseData: any) => TError[];
-  processItemSuccess: (itemResult: TResult, originalEntry: WordEntry) => void;
-  processItemError: (itemError: TError, originalEntry?: WordEntry) => void;
-  onStartProcessingItem?: (entry: WordEntry) => void;
-}
-
-export interface BatchProcessorResult {
-  totalProcessed: number;
-  totalSuccess: number;
-  totalFailed: number;
-}
-
-export async function processBatch<TPayload, TResult extends { id: number }, TError extends { id?: number }>(
-  config: BatchProcessorConfig<TPayload, TResult, TError>
-): Promise<BatchProcessorResult> {
-  const {
-    itemsToProcess,
-    batchSize,
-    delayBetweenBatchesMs,
-    operationName,
-    getBatchPayload,
-    batchApiService,
-    getSuccessItems,
-    getErrorItems,
-    processItemSuccess,
-    processItemError,
-    onStartProcessingItem
-  } = config;
-  const operationKey = `batch-${operationName.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
-
-  let totalProcessed = 0;
-  let totalSuccess = 0;
-  let totalFailed = 0;
-
-  activityManager.addActivity(operationKey, `Starting ${operationName}...`, 'info');
-
-  const batches = [];
-  for (let i = 0; i < itemsToProcess.length; i += batchSize) {
-    batches.push(itemsToProcess.slice(i, i + batchSize));
-  }
-
-  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-    const batch = batches[batchIndex];
-    const batchNumber = batchIndex + 1;
-
-    if (onStartProcessingItem) {
-      batch.forEach(entry => onStartProcessingItem(entry));
-    }
-
-    activityManager.addActivity(
-      `${operationKey}-batch-${batchNumber}`,
-      `Processing batch ${batchNumber} of ${batches.length} (${batch.length} items)...`,
-      'info'
-    );
-
-    try {
-      const payload = getBatchPayload(batch);
-      const response = await batchApiService(payload);
-
-      if (response.error) {
-        activityManager.addActivity(
-          `${operationKey}-batch-${batchNumber}-error`,
-          `Batch ${batchNumber} failed: ${response.error}`,
-          'error'
-        );
-        
-        batch.forEach(entry => {
-          processItemError({ id: entry.id } as TError, entry);
-          totalFailed++;
-        });
-      } else if (response.data) {
-        const successItems = getSuccessItems(response.data);
-        const errorItems = getErrorItems(response.data);
-
-        successItems.forEach(result => {
-          const originalEntry = batch.find(entry => entry.id === result.id);
-          if (originalEntry) {
-            processItemSuccess(result, originalEntry);
-            totalSuccess++;
-          }
-        });
-
-        errorItems.forEach(error => {
-          const originalEntry = error.id ? batch.find(entry => entry.id === error.id) : undefined;
-          processItemError(error, originalEntry);
-          totalFailed++;
-          
-          if (error.id && 'error' in error) {
-            const errorMessage = (error as any).error;
-            const entryText = originalEntry ? `Word "${originalEntry.original_text}" (ID: ${error.id})` : `Item ${error.id}`;
-            activityManager.addActivity(
-              `${operationKey}-item-${error.id}-error`,
-              `${entryText} failed: ${errorMessage}`,
-              'error'
-            );
-          }
-        });
-
-        activityManager.addActivity(
-          `${operationKey}-batch-${batchNumber}-complete`,
-          `Batch ${batchNumber} completed: ${successItems.length} successful, ${errorItems.length} failed`,
-          'success'
-        );
-      }
-
-      totalProcessed += batch.length;
-
-      if (batchIndex < batches.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, delayBetweenBatchesMs));
-      }
-    } catch (error) {
-      activityManager.addActivity(
-        `${operationKey}-batch-${batchNumber}-exception`,
-        `Batch ${batchNumber} encountered an error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'error'
-      );
-      
-      batch.forEach(entry => {
-        processItemError({ id: entry.id } as TError, entry);
-        totalFailed++;
-      });
-      
-      totalProcessed += batch.length;
-    }
-  }
-
-  activityManager.addActivity(
-    `${operationKey}-complete`,
-    `${operationName} completed: ${totalSuccess} successful, ${totalFailed} failed out of ${totalProcessed} processed`,
-    totalFailed === 0 ? 'success' : 'warning'
-  );
-
-  return {
-    totalProcessed,
-    totalSuccess,
-    totalFailed
-  };
-}
-</file>
-
-<file path="lib/openrouter.ts">
-// Shared types and interfaces for OpenRouter
-// This file can be imported by both client and server
+export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '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';
+export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-preview-05-20';
 
 export interface OpenRouterMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
+interface OpenRouterRequest {
+  model: string;
+  messages: OpenRouterMessage[];
+  temperature?: number;
+  max_tokens?: number;
+  response_format?: { type: 'json_object' };
+}
+
+export async function callOpenRouter(
+  messages: OpenRouterMessage[],
+  options: Partial<OpenRouterRequest> = {}
+): Promise<string> {
+  const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://github.com/sdxl-emoji-pipeline',
+      'X-Title': 'SDXL Emoji Pipeline'
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      messages,
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      ...options
+    })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      errorData.error?.message || 
+      `OpenRouter API error: ${response.status} ${response.statusText}`
+    );
+  }
+
+  const data = await response.json();
+  return data.choices[0].message.content;
+}
+
+// Batch prompt generation constants and interfaces
+export const BATCH_PROMPT_GENERATION_INSTRUCTIONS = `
+For each word below, generate ONE emoji object following these rules:
+
+1. Object MUST visually represent the word's meaning
+2. Maximum 4 words
+3. Single object only
+4. Choose most memorable/iconic association
+5. If describing people, use light-skinned or yellow emoji-style characters
+6. FORBIDDEN: "vibrant", "representing", "showing", generic descriptions
+
+Think: What visual helps remember this word?
+
+Examples:
+"autumn" → "orange fall leaf" (NOT green leaf)
+"winter" → "snowflake" (NOT generic season)
+"happy" → "smiling face"
+"article" → "newspaper"
+"above" → "upward arrow"
+"actor" → "light-skinned man in suit"
+`;
+
+// This interface matches the structure of items in GeneratePromptsBatchPayload entries from lib/apiClient.ts
 export interface BatchPromptEntry {
   id: number;
   english: string;
@@ -1824,53 +1566,93 @@ export interface BatchPromptEntry {
   transcription: string;
 }
 
-// Re-export server-only functions for backward compatibility
-// These will throw errors if imported client-side
-export { 
-  callOpenRouter,
-  handleOpenRouterError,
-  formatOpenRouterBatchPromptMessages,
-  OPENROUTER_API_KEY,
-  OPENROUTER_BASE_URL,
-  OPENROUTER_MODEL,
-  BATCH_PROMPT_GENERATION_INSTRUCTIONS
-} from './openrouter.server';
-</file>
+// Function to format batch prompt messages for OpenRouter
+export function formatOpenRouterBatchPromptMessages(entries: BatchPromptEntry[]): OpenRouterMessage[] {
+  const wordPairs = entries
+    .map(
+      (entry) =>
+        `ID: ${entry.id}\nEnglish: ${entry.english} ${entry.transcription}\nRussian: ${entry.russian}`
+    )
+    .join('\n\n');
 
-<file path="lib/replicateConfig.ts">
-// Centralized Replicate configuration - single source of truth
-export const REPLICATE_CONFIG = {
-  model: "fofr/sdxl-emoji:dee76b5afde21b0f01ed7925f0665b7e879c50ee718c5f78a9d38e04d523cc5e",
-  
-  // Image generation parameters
-  input: {
-    negative_prompt: "multiple objects, collection, many, crowd, group, realistic, photographic, 3d render, dark skin, black skin",
-    width: 1024,
-    height: 1024,
-    num_outputs: 1,
-    num_inference_steps: 50,
-    guidance_scale: 7.5,
-    scheduler: "K_EULER" as const,
-    lora_scale: 0.6,
-    refine: "no_refiner" as const,
-    apply_watermark: false,
-    high_noise_frac: 0.8,
-    prompt_strength: 0.8,
-    disable_safety_checker: true,
-  }
-} as const;
+  const systemMessage = `You are an AI assistant. For each word pair, generate a concise visual prompt for an emoji-style image.
+Return your response as a JSON array where each object has an "id" field matching the input id and a "prompt" field with the single object description.
+Output only valid JSON, no markdown formatting. The "prompt" should adhere to the rules provided in the user message.
+Example format: [{"id": 1, "prompt": "orange fall leaf"}, {"id": 2, "prompt": "snowflake"}]`;
 
-// Function to create input with prompt
-export function createReplicateInput(prompt: string) {
-  return {
-    ...REPLICATE_CONFIG.input,
-    prompt: `A TOK emoji of ${prompt}`,
-  };
+  const userMessageContent = `${BATCH_PROMPT_GENERATION_INSTRUCTIONS}
+
+Word pairs:
+${wordPairs}
+
+Return valid JSON only, no markdown formatting.`;
+
+  return [
+    { role: 'system', content: systemMessage },
+    { role: 'user', content: userMessageContent },
+  ];
 }
 
-// Function to get model identifier
-export function getReplicateModel() {
-  return REPLICATE_CONFIG.model;
+export function handleOpenRouterError(error: unknown) {
+  return handleAiServiceError(error, AI_SERVICE_CONFIGS.openrouter);
+}
+</file>
+
+<file path="lib/promptOverrides.ts">
+import * as yaml from 'js-yaml';
+import * as fs from 'fs';
+import { PROMPT_OVERRIDES_YAML_PATH } from './paths';
+
+interface PromptOverrides {
+  [key: string]: string;
+}
+
+let cachedOverrides: PromptOverrides | null = null;
+let lastModified: number = 0;
+
+
+function loadOverrides(): PromptOverrides {
+  try {
+    // Check if file exists
+    if (!fs.existsSync(PROMPT_OVERRIDES_YAML_PATH)) {
+      console.log('No prompt_overrides.yaml file found, using default behavior');
+      return {};
+    }
+
+    // Check if we need to reload (file modified)
+    const stats = fs.statSync(PROMPT_OVERRIDES_YAML_PATH);
+    const currentModified = stats.mtime.getTime();
+
+    if (cachedOverrides && currentModified === lastModified) {
+      return cachedOverrides;
+    }
+
+    // Load and parse YAML file
+    const fileContents = fs.readFileSync(PROMPT_OVERRIDES_YAML_PATH, 'utf8');
+    const overrides = yaml.load(fileContents) as PromptOverrides;
+
+    // Update cache
+    cachedOverrides = overrides || {};
+    lastModified = currentModified;
+
+    console.log(`Loaded ${Object.keys(cachedOverrides).length} prompt overrides from YAML`);
+    return cachedOverrides;
+
+  } catch (error) {
+    console.error('Error loading prompt overrides:', error);
+    return {};
+  }
+}
+
+export function getPromptOverride(word: string): string | null {
+  const overrides = loadOverrides();
+  const normalizedWord = word.toLowerCase().trim();
+  
+  return overrides[normalizedWord] || null;
+}
+
+export function hasPromptOverride(word: string): boolean {
+  return getPromptOverride(word) !== null;
 }
 </file>
 
@@ -2054,6 +1836,41 @@ migrateToSQLite().catch(console.error);
 }
 </file>
 
+<file path="prompt_overrides.yaml">
+# Quick Fixes for Directional Words - Using original_text as key
+# These overrides replace abstract arrows with clearer person-based actions
+
+# Basic directional words
+above: "person pointing up"
+below: "person pointing down"
+left: "person pointing left"
+right: "person pointing right"
+up: "person looking up"
+down: "person looking down"
+
+# Positional relationships
+between: "person between objects"
+behind: "person stands behind object"
+before: "person stands before object"
+next: "person gestures next"
+beside: "person stands beside object"
+
+# Movement directions
+forward: "person walking forward"
+backward: "person walking backward"
+through: "person walking through"
+across: "person walking across"
+
+# Additional problematic directional terms
+under: "person pointing under"
+over: "person pointing over"
+inside: "person pointing inside"
+outside: "person pointing outside"
+around: "person walking around"
+towards: "person walking towards"
+away: "person walking away"
+</file>
+
 <file path="tsconfig.json">
 {
   "compilerOptions": {
@@ -2084,271 +1901,54 @@ migrateToSQLite().catch(console.error);
 }
 </file>
 
-<file path="app/api/categorize-vocabulary/route.ts">
-import { NextRequest, NextResponse } from 'next/server';
-import { callOpenRouter, handleOpenRouterError } from '@/lib/openrouter';
-import { languageCardRepository } from '@/lib/db/repository';
-import { CategorizationResult } from '@/types';
-
-export const maxDuration = 60; // 60 seconds timeout
-
-interface CategorizeRequest {
-  entries: Array<{
-    id: number;
-    original_text: string;
-    translation_text: string;
-    level_id: number;
-  }>;
-}
-
-interface CategorizeResponse {
-  results: Array<{
-    id: number;
-    categorization: CategorizationResult;
-  }>;
-  errors: Array<{
-    id: number;
-    error: string;
-  }>;
-}
-
-function createCategorizationPrompt(entry: CategorizeRequest['entries'][0]): string {
-  return `Categorize the following vocabulary word for image generation suitability.
-Word: ${entry.original_text}
-Translation: ${entry.translation_text}
-Context: English language learning, level ${entry.level_id}
-
-Analyze and categorize based on:
-- Concrete/Abstract nature
-- Visual representation potential (HIGH/MEDIUM/LOW)
-- Word type (noun/verb/adjective/adverb/phrase)
-- For polysemous words, identify primary meaning
-- Suggest transformation strategy if abstract
-
-Output JSON only, matching this exact structure with valid values:
-{
-  "primary_category": "CONCRETE-VISUAL" | "ABSTRACT-SYMBOLIC" | "ACTION-VISUAL" | "STATE-METAPHORICAL",
-  "image_suitability": "HIGH" | "MEDIUM" | "LOW",
-  "word_type": "noun" | "verb" | "adjective" | "adverb" | "phrase",
-  "transformation_needed": boolean, // e.g., true or false
-  "transformation_suggestion": "string", // e.g., "represent 'happiness' with a smiling emoji face" or "" if not needed
-  "confidence": number // 0.0-1.0
-}
-
-Example of a valid JSON output:
-{
-  "primary_category": "ABSTRACT-SYMBOLIC",
-  "image_suitability": "MEDIUM",
-  "word_type": "noun",
-  "transformation_needed": true,
-  "transformation_suggestion": "Visualize as an idea lightbulb",
-  "confidence": 0.85
-}`;
-}
-
-async function categorizeEntry(entry: CategorizeRequest['entries'][0]): Promise<CategorizationResult> {
-  const prompt = createCategorizationPrompt(entry);
-  
-  try {
-    console.log(`Sending categorization request for "${entry.original_text}"`);
-    console.log('Using OpenRouter with model:', process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-preview-05-20');
-    
-    const response = await callOpenRouter([
-      {
-        role: 'system',
-        content: 'You are a helpful assistant that categorizes vocabulary words for image generation suitability. Output only valid JSON. No explanations.'
-      },
-      {
-        role: 'user',
-        content: prompt
-      }
-    ], {
-      temperature: 0.1,
-      max_tokens: 8192,
-      response_format: { type: 'json_object' }
-    });
-    
-    console.log(`OpenRouter response for "${entry.original_text}":`, response);
-    
-    // Parse the response
-    let jsonText = response.trim();
-    
-    // Remove markdown code blocks if present
-    if (jsonText.includes('```json')) {
-      jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    } else if (jsonText.includes('```')) {
-      jsonText = jsonText.replace(/```\s*/g, '').trim();
-    }
-    
-    // Extract JSON object if there's extra text
-    const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
-    jsonText = jsonMatch ? jsonMatch[0] : jsonText;
-    
-    console.log(`[Categorization] Attempting to parse JSON for entry ID ${entry.id}:`, jsonText);
-    let categorization: CategorizationResult;
-    try {
-      categorization = JSON.parse(jsonText) as CategorizationResult;
-    } catch (parseError) {
-      console.error('JSON parse error:', parseError);
-      console.error('Failed to parse text:', jsonText);
-      console.error('Original response text:', response);
-      throw new Error(`JSON parse error: ${parseError instanceof Error ? parseError.message : 'Unknown parse error'}`);
-    }
-    console.log(`[Categorization] Successfully parsed categorization for entry ID ${entry.id}:`, categorization);
-    
-    // Validate the response structure
-    if (!categorization.primary_category || !categorization.image_suitability || categorization.word_type === undefined) {
-      throw new Error('Invalid categorization response structure');
-    }
-    
-    // Ensure boolean type for transformation_needed
-    categorization.transformation_needed = Boolean(categorization.transformation_needed);
-    
-    // Ensure string type for transformation_suggestion
-    categorization.transformation_suggestion = categorization.transformation_suggestion || '';
-    
-    // Ensure confidence is a number between 0 and 1
-    categorization.confidence = Math.max(0, Math.min(1, Number(categorization.confidence) || 0.5));
-    
-    return categorization;
-  } catch (error) {
-    console.error(`[Categorization] Failed to categorize entry ID: ${entry.id}, Word: "${entry.original_text}". Error:`, error);
-    
-    // Use the OpenRouter error handler for better error messages
-    const errorInfo = handleOpenRouterError(error);
-    console.error('Handled error info:', errorInfo);
-    throw new Error(errorInfo.message);
-  }
-}
-
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json() as CategorizeRequest;
-    
-    // Validate request
-    if (!body.entries || !Array.isArray(body.entries)) {
-      return NextResponse.json({ error: 'Invalid request: entries must be an array' }, { status: 400 });
-    }
-    
-    if (body.entries.length === 0) {
-      return NextResponse.json({ error: 'Invalid request: entries array is empty' }, { status: 400 });
-    }
-    
-    if (body.entries.length > 10) {
-      return NextResponse.json({ error: 'Invalid request: maximum 10 entries allowed per batch' }, { status: 400 });
-    }
-    
-    const response: CategorizeResponse = {
-      results: [],
-      errors: [],
-    };
-    
-    // Process entries in parallel
-    const promises = body.entries.map(async (entry) => {
-      try {
-        // Update status to processing
-        await languageCardRepository.update(entry.id, {
-          categorizationStatus: 'processing',
-        });
-        
-        // Categorize the entry
-        const categorization = await categorizeEntry(entry);
-        console.log(`Successfully categorized entry ${entry.id}:`, categorization);
-        
-        // Save categorization to database
-        await languageCardRepository.update(entry.id, {
-          categorization,
-          categorizationStatus: 'completed',
-        });
-        
-        response.results.push({
-          id: entry.id,
-          categorization,
-        });
-        console.log(`Added to results array. Current results length: ${response.results.length}`);
-      } catch (error) {
-        console.error(`=== ENTRY ${entry.id} ERROR ===`);
-        console.error(`Failed to categorize entry ${entry.id}:`, error);
-        console.error(`Entry details:`, {
-          id: entry.id,
-          original_text: entry.original_text,
-          translation_text: entry.translation_text,
-          level_id: entry.level_id
-        });
-        console.error('Error details:', {
-          message: error instanceof Error ? error.message : String(error),
-          name: error instanceof Error ? error.name : 'Unknown',
-          stack: error instanceof Error ? error.stack : 'No stack',
-        });
-        console.error(`=== END ENTRY ${entry.id} ERROR ===`);
-        
-        // Update status to error
-        await languageCardRepository.update(entry.id, {
-          categorizationStatus: 'error',
-        });
-        
-        response.errors.push({
-          id: entry.id,
-          error: `Word "${entry.original_text}": ${error instanceof Error ? error.message : 'Unknown error'}`,
-        });
-      }
-    });
-    
-    await Promise.all(promises);
-    
-    console.log('Final response being sent:', {
-      resultsCount: response.results.length,
-      errorsCount: response.errors.length,
-      results: response.results,
-      errors: response.errors
-    });
-    
-    return NextResponse.json(response);
-  } catch (error) {
-    console.error('=== CATEGORIZATION API ERROR ===');
-    console.error('Categorization API error:', error);
-    console.error('API Error details:', {
-      message: error instanceof Error ? error.message : String(error),
-      name: error instanceof Error ? error.name : 'Unknown',
-      stack: error instanceof Error ? error.stack : 'No stack',
-    });
-    console.error('=== END CATEGORIZATION API ERROR ===');
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to categorize vocabulary' },
-      { status: 500 }
-    );
-  }
-}
-</file>
-
 <file path="app/api/generate-image/route.ts">
 import Replicate from 'replicate';
-import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { NextRequest, NextResponse } from 'next/server';
 import { getReplicateModel, createReplicateInput } from '@/lib/replicateConfig';
+import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
+import { saveImageFromUrl } from '@/lib/imageUtils';
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN!,
 });
 
-export async function POST(request: Request) {
-  try {
-    const { prompt, entryId, englishWord } = await request.json();
-
-    if (!prompt || !entryId || !englishWord) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { prompt: string; entryId: number; englishWord: string }) => {
+    const validation = validateRequestBody(body, ['prompt', 'entryId', 'englishWord']);
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
 
-    const output = await replicate.run(
-      getReplicateModel(),
-      {
-        input: createReplicateInput(prompt),
+    const { prompt, entryId } = body;
+
+    let output;
+    try {
+      output = await replicate.run(
+        getReplicateModel(),
+        {
+          input: createReplicateInput(prompt),
+        }
+      );
+    } catch (error: any) {
+      console.error('Replicate API error:', error);
+      
+      // Handle specific Replicate API errors
+      if (error.message?.includes('Invalid token') || error.message?.includes('Unauthorized')) {
+        return NextResponse.json(
+          { error: 'Invalid API token. Please check your REPLICATE_API_TOKEN in .env.local' },
+          { status: 401 }
+        );
       }
-    );
+      
+      if (error.message?.includes('rate limit')) {
+        return NextResponse.json(
+          { error: 'Rate limit exceeded. Please try again later.' },
+          { status: 429 }
+        );
+      }
+      
+      throw error; // Re-throw to let handleApiRequest handle it
+    }
 
     console.log('Raw output from replicate.run:', output);
     console.log('Output type:', typeof output);
@@ -2389,39 +1989,14 @@ export async function POST(request: Request) {
 
     // Download and save the image locally
     try {
-      console.log('Downloading image from:', imageUrl);
-      const response = await fetch(imageUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch image: ${response.statusText}`);
-      }
-      
-      const imageBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(imageBuffer);
-      
-      // Create images directory if it doesn't exist
-      const imagesDir = path.join(process.cwd(), 'public', 'images');
-      if (!fs.existsSync(imagesDir)) {
-        fs.mkdirSync(imagesDir, { recursive: true });
-      }
-      
-      // Use entry ID as filename - simple and unique
-      const filename = `${entryId}.png`;
-      const filepath = path.join(imagesDir, filename);
-      
-      // Save the file
-      fs.writeFileSync(filepath, buffer);
-      console.log('Image saved to:', filepath);
-      
-      // Return both the original URL and the local path with cache-busting timestamp
-      const timestamp = Date.now();
-      const localImageUrl = `/images/${filename}?t=${timestamp}`;
+      const result = await saveImageFromUrl(imageUrl, entryId);
       const generatedAt = new Date().toISOString();
       
       return NextResponse.json({ 
-        imageUrl: localImageUrl, // Return local path with cache-buster for the app to use
-        originalUrl: imageUrl,    // Keep original URL as backup
-        localPath: filepath,
-        filename: filename,
+        imageUrl: result.localImageUrl, // Return local path with cache-buster for the app to use
+        originalUrl: result.originalUrl, // Keep original URL as backup
+        localPath: result.localPath,
+        filename: result.filename,
         status: 'completed',
         generatedAt: generatedAt, // Add timestamp for sorting
       });
@@ -2434,62 +2009,125 @@ export async function POST(request: Request) {
         downloadError: 'Failed to save image locally, using remote URL',
       });
     }
+  });
+}
+</file>
+
+<file path="app/api/queue-image/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { imageQueue } from '@/lib/imageQueue';
+import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
+
+// In-memory storage for completion callbacks
+const completionCallbacks = new Map<string, (result: any) => void>();
+const errorCallbacks = new Map<string, (error: string) => void>();
+
+// Set up notification handlers on the queue instance
+(imageQueue as any).notifyCompletion = function(item: any, result: any) {
+  const callback = completionCallbacks.get(item.id);
+  if (callback) {
+    callback(result);
+    completionCallbacks.delete(item.id);
+  }
+};
+
+(imageQueue as any).notifyError = function(item: any, error: string) {
+  const errorCallback = errorCallbacks.get(item.id);
+  if (errorCallback) {
+    errorCallback(error);
+    errorCallbacks.delete(item.id);
+  }
+};
+
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { action: string; [key: string]: any }) => {
+    const validation = validateRequestBody(body, ['action']);
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
+    }
+
+    const { action, ...data } = body;
+
+    switch (action) {
+      case 'add':
+        return handleAddToQueue(data);
+      case 'status':
+        return handleGetStatus();
+      case 'items':
+        return handleGetItems();
+      default:
+        return NextResponse.json(
+          { error: 'Invalid action' },
+          { status: 400 }
+        );
+    }
+  });
+}
+
+async function handleAddToQueue(data: any) {
+  const { entryId, englishWord, prompt } = data;
+
+  console.log(`API: Adding to queue - entryId: ${entryId}, word: ${englishWord}`);
+
+  if (!entryId || !englishWord || !prompt) {
+    console.log('API: Missing required fields:', { entryId, englishWord, prompt: !!prompt });
+    return NextResponse.json(
+      { error: 'Missing required fields: entryId, englishWord, prompt' },
+      { status: 400 }
+    );
+  }
+
+  try {
+    // Add to queue
+    console.log(`API: Adding to imageQueue...`);
+    const queueId = await imageQueue.addToQueue(entryId, englishWord, prompt);
+    console.log(`API: Added to queue with ID: ${queueId}`);
+
+    // Create a promise that resolves when the image is generated
+    const resultPromise = new Promise<any>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        completionCallbacks.delete(queueId);
+        errorCallbacks.delete(queueId);
+        reject(new Error('Generation timeout'));
+      }, 300000); // 5 minute timeout
+
+      completionCallbacks.set(queueId, (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      });
+
+      errorCallbacks.set(queueId, (error) => {
+        clearTimeout(timeout);
+        reject(new Error(error));
+      });
+    });
+
+    // Wait for completion
+    const result = await resultPromise;
+
+    return NextResponse.json({
+      queueId,
+      status: 'completed',
+      ...result,
+    });
+
   } catch (error: any) {
-    console.error('Error generating image:', error);
-    
-    // Handle specific Replicate API errors
-    if (error.message?.includes('Invalid token') || error.message?.includes('Unauthorized')) {
-      return NextResponse.json(
-        { error: 'Invalid API token. Please check your REPLICATE_API_TOKEN in .env.local' },
-        { status: 401 }
-      );
-    }
-    
-    if (error.message?.includes('rate limit')) {
-      return NextResponse.json(
-        { error: 'Rate limit exceeded. Please try again later.' },
-        { status: 429 }
-      );
-    }
-    
+    console.error('Error adding to queue:', error);
     return NextResponse.json(
       { error: error.message || 'Failed to generate image' },
       { status: 500 }
     );
   }
 }
-</file>
 
-<file path="app/api/generate-prompt/route.ts">
-import { NextResponse } from 'next/server';
-import { getGeminiModel, formatSinglePrompt, handleGeminiError } from '@/lib/gemini';
+async function handleGetStatus() {
+  const status = imageQueue.getQueueStatus();
+  return NextResponse.json(status);
+}
 
-export async function POST(request: Request) {
-  try {
-    const { english, russian, transcription } = await request.json();
-
-    if (!english || !russian || !transcription) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
-    }
-
-    const model = getGeminiModel();
-    const prompt = formatSinglePrompt(english, russian, transcription);
-
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-
-    return NextResponse.json({ prompt: text });
-  } catch (error: any) {
-    const errorInfo = handleGeminiError(error);
-    return NextResponse.json(
-      { error: errorInfo.message },
-      { status: errorInfo.status }
-    );
-  }
+async function handleGetItems() {
+  const items = imageQueue.getQueueItems();
+  return NextResponse.json({ items });
 }
 </file>
 
@@ -2917,13 +2555,13 @@ import { Kysely, SqliteDialect } from 'kysely';
 import { Database as DatabaseType, DB } from './schema';
 import { createTables } from './migrations';
 import { runMigrations } from './runMigrations';
-import path from 'path';
+import { DATABASE_FILE_PATH } from '../paths';
 
 let db: DB | null = null;
 
 export function getDatabase(): DB {
   if (!db) {
-    const dbPath = process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'language-cards.db');
+    const dbPath = process.env.DATABASE_PATH || DATABASE_FILE_PATH;
     
     const sqlite = new Database(dbPath);
     sqlite.pragma('journal_mode = WAL');
@@ -2950,225 +2588,6 @@ export function closeDatabase(): void {
     db = null;
   }
 }
-</file>
-
-<file path="lib/db/repository.ts">
-import { getDatabase } from './database';
-import { WordEntryTable } from './schema';
-import { WordEntry } from '@/types';
-
-export class LanguageCardRepository {
-  private get db() {
-    return getDatabase();
-  }
-
-  async create(entry: Omit<WordEntry, 'imageStatus' | 'promptStatus'>): Promise<WordEntry> {
-    const result = await this.db
-      .insertInto('word_entries')
-      .values({
-        id: entry.id,
-        original_text: entry.original_text,
-        translation_text: entry.translation_text,
-        level_id: entry.level_id,
-        transcription: entry.transcription,
-        prompt: entry.prompt || null,
-        image_url: entry.imageUrl || null,
-        image_status: 'none',
-        prompt_status: 'none',
-        categorization_status: 'none',
-        replicate_id: entry.replicateId || null,
-        qa_score: entry.qaScore || null,
-        image_generated_at: entry.imageGeneratedAt || null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .returningAll()
-      .executeTakeFirstOrThrow();
-
-    return this.mapToWordEntry(result);
-  }
-
-  async update(id: number, updates: Partial<WordEntry>): Promise<WordEntry | null> {
-    const dbUpdates: Partial<WordEntryTable> = {
-      updated_at: new Date().toISOString(),
-    };
-
-    if (updates.original_text !== undefined) dbUpdates.original_text = updates.original_text;
-    if (updates.translation_text !== undefined) dbUpdates.translation_text = updates.translation_text;
-    if (updates.level_id !== undefined) dbUpdates.level_id = updates.level_id;
-    if (updates.transcription !== undefined) dbUpdates.transcription = updates.transcription;
-    if (updates.prompt !== undefined) dbUpdates.prompt = updates.prompt || null;
-    if (updates.imageUrl !== undefined) dbUpdates.image_url = updates.imageUrl || null;
-    if (updates.imageStatus !== undefined) dbUpdates.image_status = updates.imageStatus;
-    if (updates.promptStatus !== undefined) dbUpdates.prompt_status = updates.promptStatus;
-    if (updates.replicateId !== undefined) dbUpdates.replicate_id = updates.replicateId || null;
-    if (updates.qaScore !== undefined) dbUpdates.qa_score = updates.qaScore || null;
-    if (updates.imageGeneratedAt !== undefined) dbUpdates.image_generated_at = updates.imageGeneratedAt || null;
-    
-    // Handle categorization updates
-    if (updates.categorization !== undefined) {
-      const cat = updates.categorization;
-      dbUpdates.categorization_primary_category = cat.primary_category;
-      dbUpdates.categorization_image_suitability = cat.image_suitability;
-      dbUpdates.categorization_word_type = (cat.word_type === undefined || cat.word_type === null) ? null : cat.word_type;
-      // Ensure explicit NULL if word_type is undefined or null from sanitized object
-      dbUpdates.categorization_transformation_needed = cat.transformation_needed ? 1 : 0;
-      dbUpdates.categorization_transformation_suggestion = cat.transformation_suggestion;
-      dbUpdates.categorization_confidence = cat.confidence;
-    }
-    if (updates.categorizationStatus !== undefined) dbUpdates.categorization_status = updates.categorizationStatus;
-
-    const result = await this.db
-      .updateTable('word_entries')
-      .set(dbUpdates)
-      .where('id', '=', id)
-      .returningAll()
-      .executeTakeFirst();
-
-    return result ? this.mapToWordEntry(result) : null;
-  }
-
-  async delete(id: number): Promise<boolean> {
-    const result = await this.db
-      .deleteFrom('word_entries')
-      .where('id', '=', id)
-      .execute();
-
-    return result.length > 0;
-  }
-
-  async findById(id: number): Promise<WordEntry | null> {
-    const result = await this.db
-      .selectFrom('word_entries')
-      .selectAll()
-      .where('id', '=', id)
-      .executeTakeFirst();
-
-    return result ? this.mapToWordEntry(result) : null;
-  }
-
-  async findAll(): Promise<WordEntry[]> {
-    const results = await this.db
-      .selectFrom('word_entries')
-      .selectAll()
-      .orderBy('id', 'asc')
-      .execute();
-
-    return results.map(this.mapToWordEntry);
-  }
-
-  async upsert(entry: WordEntry): Promise<WordEntry> {
-    const existing = await this.findById(entry.id);
-    
-    if (existing) {
-      return await this.update(entry.id, entry) || existing;
-    } else {
-      return await this.create(entry);
-    }
-  }
-
-  async bulkUpsert(entries: WordEntry[]): Promise<WordEntry[]> {
-    const results: WordEntry[] = [];
-    
-    // Use a transaction for better performance
-    await this.db.transaction().execute(async (trx) => {
-      for (const entry of entries) {
-        const existing = await trx
-          .selectFrom('word_entries')
-          .selectAll()
-          .where('id', '=', entry.id)
-          .executeTakeFirst();
-
-        let result: WordEntryTable;
-        
-        if (existing) {
-          result = await trx
-            .updateTable('word_entries')
-            .set({
-              original_text: entry.original_text,
-              translation_text: entry.translation_text,
-              level_id: entry.level_id,
-              transcription: entry.transcription,
-              prompt: entry.prompt || null,
-              image_url: entry.imageUrl || null,
-              image_status: entry.imageStatus,
-              prompt_status: entry.promptStatus,
-              categorization_status: entry.categorizationStatus || 'none',
-              replicate_id: entry.replicateId || null,
-              qa_score: entry.qaScore || null,
-              image_generated_at: entry.imageGeneratedAt || null,
-              updated_at: new Date().toISOString(),
-            })
-            .where('id', '=', entry.id)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-        } else {
-          result = await trx
-            .insertInto('word_entries')
-            .values({
-              id: entry.id,
-              original_text: entry.original_text,
-              translation_text: entry.translation_text,
-              level_id: entry.level_id,
-              transcription: entry.transcription,
-              prompt: entry.prompt || null,
-              image_url: entry.imageUrl || null,
-              image_status: entry.imageStatus,
-              prompt_status: entry.promptStatus,
-              categorization_status: entry.categorizationStatus || 'none',
-              replicate_id: entry.replicateId || null,
-              qa_score: entry.qaScore || null,
-              image_generated_at: entry.imageGeneratedAt || null,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            })
-            .returningAll()
-            .executeTakeFirstOrThrow();
-        }
-        
-        results.push(this.mapToWordEntry(result));
-      }
-    });
-    
-    return results;
-  }
-
-  private mapToWordEntry(row: WordEntryTable): WordEntry {
-    const entry: WordEntry = {
-      id: row.id,
-      original_text: row.original_text,
-      translation_text: row.translation_text,
-      level_id: row.level_id,
-      transcription: row.transcription,
-      prompt: row.prompt || undefined,
-      imageUrl: row.image_url || undefined,
-      imageStatus: row.image_status,
-      promptStatus: row.prompt_status,
-      replicateId: row.replicate_id || undefined,
-      qaScore: row.qa_score,
-      imageGeneratedAt: row.image_generated_at || undefined,
-    };
-    
-    // Map categorization if present
-    if (row.categorization_primary_category) {
-      entry.categorization = {
-        primary_category: row.categorization_primary_category,
-        image_suitability: row.categorization_image_suitability!,
-        word_type: row.categorization_word_type,
-        transformation_needed: row.categorization_transformation_needed === 1,
-        transformation_suggestion: row.categorization_transformation_suggestion || '',
-        confidence: row.categorization_confidence || 0,
-      };
-    }
-    
-    entry.categorizationStatus = row.categorization_status || 'none';
-    
-    return entry;
-  }
-}
-
-// Export singleton instance
-export const languageCardRepository = new LanguageCardRepository();
 </file>
 
 <file path="lib/db/schema.ts">
@@ -3205,8 +2624,227 @@ export interface Database {
 export type DB = Kysely<Database>;
 </file>
 
+<file path="lib/apiClient.ts">
+import { WordEntry, CategorizationResult } from '@/types';
+
+// Generic API response type
+export interface ApiResponse<T = any> {
+  data?: T;
+  error?: string;
+  status: number;
+}
+
+// Request payload types
+export interface GeneratePromptPayload {
+  english: string;
+  russian: string;
+  transcription: string;
+}
+
+export interface QueueImagePayload {
+  action: 'add';
+  entryId: number;
+  englishWord: string;
+  prompt: string;
+}
+
+export interface GeneratePromptsBatchPayload {
+  entries: Array<{
+    id: number;
+    english: string;
+    russian: string;
+    transcription: string;
+  }>;
+}
+
+export interface CategorizeVocabularyPayload {
+  entries: Array<{
+    id: number;
+    original_text: string;
+    translation_text: string;
+    level_id: number;
+  }>;
+}
+
+export interface RegenerateImagePayload {
+  entryId: number;
+  prompt: string;
+}
+
+export interface LanguageCardsPayload {
+  word: string;
+}
+
+export interface BatchGenerateImagesPayload {
+  entries: Array<{
+    entryId: number;
+    prompt: string;
+    englishWord: string;
+  }>;
+}
+
+// Response types
+export interface GeneratePromptResponse {
+  prompt: string;
+}
+
+export interface QueueImageResponse {
+  status: string;
+  imageUrl?: string;
+  generatedAt?: string;
+}
+
+export interface GeneratePromptsBatchResponse {
+  prompts: Array<{
+    id: number;
+    prompt: string;
+  }>;
+}
+
+export interface CategorizeVocabularyResponse {
+  results: Array<{
+    id: number;
+    categorization: CategorizationResult;
+  }>;
+  errors: Array<{
+    id: number;
+    error: string;
+  }>;
+}
+
+export interface RegenerateImageResponse {
+  success: boolean;
+  imageUrl?: string;
+  generatedAt?: string;
+  error?: string;
+}
+
+export interface LanguageCardsResponse {
+  cards: WordEntry[];
+  totalWords: number;
+}
+
+export interface BatchGenerateImagesResponse {
+  success: boolean;
+  message: string;
+  queuedCount: number;
+  errorCount: number;
+  errors?: Array<{
+    entryId: number;
+    error: string;
+  }>;
+}
+
+// Generic API call utility
+async function apiCall<T>(
+  endpoint: string,
+  options: {
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+    body?: any;
+  } = {}
+): Promise<ApiResponse<T>> {
+  const { method = 'GET', body } = options;
+
+  try {
+    const response = await fetch(endpoint, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      ...(body && { body: JSON.stringify(body) }),
+    });
+
+    const status = response.status;
+
+    if (!response.ok) {
+      // Try to parse error message from response
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      return {
+        error: errorData.error || `HTTP ${status}`,
+        status,
+      };
+    }
+
+    const data = await response.json();
+    return {
+      data,
+      status,
+    };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : 'Network error',
+      status: 0,
+    };
+  }
+}
+
+// Service functions
+export async function generatePromptService(
+  payload: GeneratePromptPayload
+): Promise<ApiResponse<GeneratePromptResponse>> {
+  return apiCall<GeneratePromptResponse>('/api/generate-prompt', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function queueImageService(
+  payload: QueueImagePayload
+): Promise<ApiResponse<QueueImageResponse>> {
+  return apiCall<QueueImageResponse>('/api/queue-image', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function generatePromptsBatchService(
+  payload: GeneratePromptsBatchPayload
+): Promise<ApiResponse<GeneratePromptsBatchResponse>> {
+  return apiCall<GeneratePromptsBatchResponse>('/api/generate-prompts-batch', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function categorizeVocabularyService(
+  payload: CategorizeVocabularyPayload
+): Promise<ApiResponse<CategorizeVocabularyResponse>> {
+  return apiCall<CategorizeVocabularyResponse>('/api/categorize-vocabulary', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function regenerateImageService(
+  payload: RegenerateImagePayload
+): Promise<ApiResponse<RegenerateImageResponse>> {
+  return apiCall<RegenerateImageResponse>('/api/generate-image', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function fetchLanguageCardsService(
+  payload: LanguageCardsPayload
+): Promise<ApiResponse<LanguageCardsResponse>> {
+  return apiCall<LanguageCardsResponse>(`/api/language-cards?word=${encodeURIComponent(payload.word)}`, {
+    method: 'GET',
+  });
+}
+
+export async function batchGenerateImagesService(
+  payload: BatchGenerateImagesPayload
+): Promise<ApiResponse<BatchGenerateImagesResponse>> {
+  return apiCall<BatchGenerateImagesResponse>('/api/generate-images-batch', {
+    method: 'POST',
+    body: payload,
+  });
+}
+</file>
+
 <file path="lib/gemini.ts">
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { handleAiServiceError, AI_SERVICE_CONFIGS } from './aiUtils';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
@@ -3290,470 +2928,37 @@ export function formatBatchPrompt(entries: Array<{ id: number; english: string; 
 }
 
 export function handleGeminiError(error: any) {
-  console.error('Gemini API Error:', error);
-  
-  if (error.message?.includes('API_KEY_INVALID') || error.message?.includes('Invalid API key')) {
-    return {
-      message: 'Invalid API key. Please check your GEMINI_API_KEY in .env.local',
-      status: 401
-    };
-  }
-  
-  if (error.message?.includes('not found') || error.message?.includes('404')) {
-    return {
-      message: 'Gemini model not available. Please check the model name.',
-      status: 404
-    };
-  }
-  
-  if (error.message?.includes('RATE_LIMIT_EXCEEDED') || error.message?.includes('quota')) {
-    return {
-      message: 'Rate limit exceeded. Please try again later.',
-      status: 429
-    };
-  }
-  
-  return {
-    message: error.message || 'Failed to generate content',
-    status: 500
-  };
+  return handleAiServiceError(error, AI_SERVICE_CONFIGS.gemini);
 }
 </file>
 
-<file path="lib/imageQueue.ts">
-import Replicate from 'replicate';
-import { getReplicateModel, createReplicateInput } from './replicateConfig';
+<file path="lib/openrouter.ts">
+// Shared types and interfaces for OpenRouter
+// This file can be imported by both client and server
 
-const replicate = new Replicate({
-  auth: process.env.REPLICATE_API_TOKEN!,
-});
-
-interface QueueItem {
-  id: string;
-  entryId: number;
-  englishWord: string;
-  prompt: string;
-  predictionId?: string;
-  status: 'pending' | 'processing' | 'completed' | 'error';
-  retries: number;
-  createdAt: Date;
+export interface OpenRouterMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
 }
 
-class ImageGenerationQueue {
-  private queue: QueueItem[] = [];
-  private processing = false;
-  private maxRetries = 3;
-  private concurrentLimit = 1; // Process one at a time to avoid rate limits
-  private processingCount = 0;
-
-  // Add item to queue
-  async addToQueue(entryId: number, englishWord: string, prompt: string): Promise<string> {
-    // Check if this entry is already in queue
-    const existingItem = this.queue.find(item => item.entryId === entryId);
-    if (existingItem) {
-      console.log(`Entry ${entryId} (${englishWord}) already in queue with status: ${existingItem.status}`);
-      return existingItem.id;
-    }
-
-    const queueId = `queue-${Date.now()}-${entryId}`;
-    const item: QueueItem = {
-      id: queueId,
-      entryId,
-      englishWord,
-      prompt,
-      status: 'pending',
-      retries: 0,
-      createdAt: new Date(),
-    };
-
-    this.queue.push(item);
-    console.log(`Added to queue: ${englishWord} (${queueId}) - Total queue: ${this.queue.length}`);
-    
-    // Start processing if not already running
-    if (!this.processing) {
-      this.startProcessing();
-    }
-
-    return queueId;
-  }
-
-  // Start processing queue
-  private async startProcessing() {
-    if (this.processing) {
-      console.log('Processing already running, skipping...');
-      return;
-    }
-    
-    this.processing = true;
-    console.log(`Starting image queue processing... Total items: ${this.queue.length}`);
-
-    while (this.queue.length > 0) {
-      const pendingItems = this.queue.filter(item => item.status === 'pending');
-      console.log(`Queue status: Total=${this.queue.length}, Pending=${pendingItems.length}`);
-      
-      const item = pendingItems[0]; // Get first pending item
-      if (!item) {
-        console.log('No pending items, waiting...');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        continue;
-      }
-
-      console.log(`Processing next item: ${item.englishWord} (${item.id})`);
-      
-      // Process one item at a time (sequential processing)
-      await this.processItem(item);
-      
-      // Small delay between items to avoid overwhelming the API
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-
-    this.processing = false;
-    console.log('Queue processing finished - no more items');
-  }
-
-  // Process individual item
-  private async processItem(item: QueueItem) {
-    while (item.status === 'pending' && item.retries < this.maxRetries) {
-      try {
-        console.log(`Processing: ${item.englishWord} (${item.id}) - Attempt ${item.retries + 1}`);
-        item.status = 'processing';
-
-        // Create prediction (async) using centralized config
-        const prediction = await replicate.predictions.create({
-          version: getReplicateModel(),
-          input: createReplicateInput(item.prompt),
-        });
-
-        item.predictionId = prediction.id;
-        console.log(`Created prediction: ${prediction.id} for ${item.englishWord}`);
-
-        // Wait for completion
-        const result = await replicate.wait(prediction);
-        
-        if (result.status === 'succeeded' && result.output) {
-          await this.handleSuccess(item, result.output);
-          return; // Success - exit the retry loop
-        } else {
-          throw new Error(`Prediction failed: ${result.error || 'Unknown error'}`);
-        }
-
-      } catch (error) {
-        console.error(`Attempt ${item.retries + 1} failed for ${item.englishWord}:`, error);
-        item.retries++;
-        
-        if (item.retries < this.maxRetries) {
-          console.log(`Retrying ${item.englishWord} (attempt ${item.retries + 1}/${this.maxRetries}) after delay`);
-          item.status = 'pending';
-          // Add delay before retry (exponential backoff)
-          await new Promise(resolve => setTimeout(resolve, 5000 * item.retries));
-        } else {
-          console.error(`Max retries reached for ${item.englishWord} (${item.id})`);
-          item.status = 'error';
-          
-          // Notify error
-          this.notifyError(item, (error as Error).message || 'Generation failed');
-          
-          // Remove from queue
-          this.removeFromQueue(item.id);
-          return; // Exit retry loop
-        }
-      }
-    }
-  }
-
-  // Handle successful generation
-  private async handleSuccess(item: QueueItem, output: any) {
-    try {
-      console.log(`Success: ${item.englishWord} (${item.id})`);
-      
-      // Get image URL from output
-      let imageUrl: string;
-      if (Array.isArray(output) && output.length > 0) {
-        const fileOutput = output[0] as any;
-        imageUrl = fileOutput.url ? fileOutput.url().toString() : fileOutput.toString();
-      } else {
-        throw new Error('Invalid output format');
-      }
-
-      // Download and save image
-      const downloadResult = await this.downloadAndSaveImage(imageUrl, item.entryId);
-      
-      item.status = 'completed';
-      
-      // Notify completion via callback or event
-      this.notifyCompletion(item, {
-        imageUrl: downloadResult.localImageUrl,
-        originalUrl: imageUrl,
-        generatedAt: new Date().toISOString(),
-      });
-
-      // Remove from queue
-      this.removeFromQueue(item.id);
-
-    } catch (error) {
-      console.error(`Error processing success for ${item.englishWord}:`, error);
-      throw error; // Re-throw to be handled by processItem
-    }
-  }
-
-
-  // Download and save image locally
-  private async downloadAndSaveImage(imageUrl: string, entryId: number) {
-    const fs = require('fs');
-    const path = require('path');
-
-    const response = await fetch(imageUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.statusText}`);
-    }
-    
-    const imageBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(imageBuffer);
-    
-    // Create images directory if it doesn't exist
-    const imagesDir = path.join(process.cwd(), 'public', 'images');
-    if (!fs.existsSync(imagesDir)) {
-      fs.mkdirSync(imagesDir, { recursive: true });
-    }
-    
-    // Use entry ID as filename - simple and unique
-    const filename = `${entryId}.png`;
-    const filepath = path.join(imagesDir, filename);
-    
-    // Save file
-    fs.writeFileSync(filepath, buffer);
-    
-    // Return local URL with cache buster
-    const timestamp = Date.now();
-    const localImageUrl = `/images/${filename}?t=${timestamp}`;
-    
-    return { localImageUrl, filepath, filename };
-  }
-
-  // Remove item from queue
-  private removeFromQueue(queueId: string) {
-    const index = this.queue.findIndex(item => item.id === queueId);
-    if (index > -1) {
-      const item = this.queue[index];
-      this.queue.splice(index, 1);
-      console.log(`Removed from queue: ${item.englishWord} (${queueId}) - Remaining: ${this.queue.length}`);
-    } else {
-      console.log(`Item not found in queue for removal: ${queueId}`);
-    }
-  }
-
-  // Get queue status
-  getQueueStatus() {
-    const status = {
-      total: this.queue.length,
-      pending: this.queue.filter(item => item.status === 'pending').length,
-      processing: this.queue.filter(item => item.status === 'processing').length,
-      completed: this.queue.filter(item => item.status === 'completed').length,
-      errors: this.queue.filter(item => item.status === 'error').length,
-      isProcessing: this.processing,
-    };
-    
-    return status;
-  }
-
-  // Get queue items
-  getQueueItems() {
-    return this.queue.map(item => ({
-      id: item.id,
-      entryId: item.entryId,
-      englishWord: item.englishWord,
-      status: item.status,
-      retries: item.retries,
-      createdAt: item.createdAt,
-      predictionId: item.predictionId,
-    }));
-  }
-
-  // Callback methods (to be overridden)
-  protected notifyCompletion(item: QueueItem, result: any) {
-    // Override this method to handle completion
-    console.log(`✅ Completed: ${item.englishWord}`);
-  }
-
-  protected notifyError(item: QueueItem, error: string) {
-    // Override this method to handle errors
-    console.log(`❌ Error: ${item.englishWord} - ${error}`);
-  }
-
-  protected notifyProgress(item: QueueItem, status: string) {
-    // Override this method to handle progress updates
-    console.log(`🔄 Progress: ${item.englishWord} - ${status}`);
-  }
+export interface BatchPromptEntry {
+  id: number;
+  english: string;
+  russian: string;
+  transcription: string;
 }
 
-// Export singleton instance
-export const imageQueue = new ImageGenerationQueue();
-export type { QueueItem };
-</file>
-
-<file path="store/useAppStore.ts">
-import { create } from 'zustand';
-import { WordEntry, AppState } from '@/types';
-
-interface AppStore extends AppState {
-  setEntries: (entries: WordEntry[]) => void;
-  updateEntry: (id: number, updates: Partial<WordEntry>) => void;
-  setCurrentPage: (page: number) => void;
-  setItemsPerPage: (items: number) => void;
-  setSearchQuery: (query: string) => void;
-  setLevelFilter: (level: number | null) => void;
-  setSortBy: (field: string) => void;
-  setSortOrder: (order: 'asc' | 'desc') => void;
-  setActiveTab: (tab: 'table' | 'gallery') => void;
-  getFilteredEntries: () => WordEntry[];
-  clearData: () => void;
-  syncWithDatabase: () => Promise<void>;
-  loadFromDatabase: () => Promise<void>;
-  isInitialized: boolean;
-}
-
-const initialState: AppState = {
-  entries: [],
-  currentPage: 1,
-  itemsPerPage: 100,
-  searchQuery: '',
-  levelFilter: null,
-  sortBy: 'id',
-  sortOrder: 'asc',
-  activeTab: 'table',
-};
-
-export const useAppStore = create<AppStore>()((set, get) => ({
-      ...initialState,
-      isInitialized: false,
-      
-      setEntries: async (entries) => {
-        set({ entries, currentPage: 1 });
-        
-        // Sync to database in background
-        try {
-          await fetch('/api/language-cards', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(entries),
-          });
-        } catch (error) {
-          console.error('Failed to sync entries to database:', error);
-        }
-      },
-      
-      updateEntry: async (id, updates) => {
-        set((state) => ({
-          entries: state.entries.map((entry) =>
-            entry.id === id ? { ...entry, ...updates } : entry
-          ),
-        }));
-        
-        // Update in database
-        try {
-          await fetch('/api/language-cards', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id, updates }),
-          });
-        } catch (error) {
-          console.error('Failed to update entry in database:', error);
-        }
-      },
-      
-      setCurrentPage: (currentPage) => set({ currentPage }),
-      setItemsPerPage: (itemsPerPage) => set({ itemsPerPage, currentPage: 1 }),
-      setSearchQuery: (searchQuery) => set({ searchQuery, currentPage: 1 }),
-      setLevelFilter: (levelFilter) => set({ levelFilter, currentPage: 1 }),
-      setSortBy: (sortBy) => set({ sortBy }),
-      setSortOrder: (sortOrder) => set({ sortOrder }),
-      setActiveTab: (activeTab) => set({ activeTab }),
-      
-      getFilteredEntries: () => {
-        const state = get();
-        let filtered = [...state.entries];
-        
-        // Apply search filter
-        if (state.searchQuery) {
-          const query = state.searchQuery.toLowerCase();
-          filtered = filtered.filter(
-            (entry) =>
-              entry.original_text.toLowerCase().includes(query) ||
-              entry.translation_text.toLowerCase().includes(query) ||
-              entry.transcription.toLowerCase().includes(query) ||
-              (entry.prompt && entry.prompt.toLowerCase().includes(query))
-          );
-        }
-        
-        // Apply level filter
-        if (state.levelFilter !== null) {
-          filtered = filtered.filter((entry) => entry.level_id === state.levelFilter);
-        }
-        
-        // Apply sorting
-        filtered.sort((a, b) => {
-          let aVal = a[state.sortBy as keyof WordEntry];
-          let bVal = b[state.sortBy as keyof WordEntry];
-          
-          if (aVal === undefined || bVal === undefined) return 0;
-          
-          if (typeof aVal === 'string' && typeof bVal === 'string') {
-            aVal = aVal.toLowerCase();
-            bVal = bVal.toLowerCase();
-          }
-          
-          if (aVal < bVal) return state.sortOrder === 'asc' ? -1 : 1;
-          if (aVal > bVal) return state.sortOrder === 'asc' ? 1 : -1;
-          return 0;
-        });
-        
-        return filtered;
-      },
-      
-      clearData: async () => {
-        set(initialState);
-        // Note: We don't clear the database here to preserve data
-      },
-      
-      syncWithDatabase: async () => {
-        const state = get();
-        if (state.entries.length > 0) {
-          try {
-            await fetch('/api/language-cards', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(state.entries),
-            });
-          } catch (error) {
-            console.error('Failed to sync with database:', error);
-          }
-        }
-      },
-      
-      loadFromDatabase: async () => {
-        try {
-          const response = await fetch('/api/language-cards');
-          if (response.ok) {
-            const entries = await response.json();
-            if (entries.length > 0) {
-              set({ entries, isInitialized: true });
-            } else {
-              set({ isInitialized: true });
-            }
-          } else {
-            set({ isInitialized: true });
-          }
-        } catch (error) {
-          console.error('Failed to load from database:', error);
-          set({ isInitialized: true });
-        }
-      },
-    }));
-
-// Initialize database on first load
-if (typeof window !== 'undefined') {
-  useAppStore.getState().loadFromDatabase();
-}
+// Re-export server-only functions for backward compatibility
+// These will throw errors if imported client-side
+export { 
+  callOpenRouter,
+  handleOpenRouterError,
+  formatOpenRouterBatchPromptMessages,
+  OPENROUTER_API_KEY,
+  OPENROUTER_BASE_URL,
+  OPENROUTER_MODEL,
+  BATCH_PROMPT_GENERATION_INSTRUCTIONS
+} from './openrouter.server';
 </file>
 
 <file path=".gitignore">
@@ -3825,72 +3030,223 @@ const config = {
 export default config;
 </file>
 
-<file path="app/page.tsx">
-'use client';
+<file path="app/api/categorize-vocabulary/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { callOpenRouter, handleOpenRouterError } from '@/lib/openrouter';
+import { languageCardRepository } from '@/lib/db/repository';
+import { CategorizationResult } from '@/types';
+import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
 
-import { useState } from 'react';
-import { useAppStore } from '@/store/useAppStore';
-import FileUpload from '@/components/FileUpload';
-import DataTable from '@/components/DataTable';
-import Gallery from '@/components/Gallery';
-import ASCIILogo from '@/components/ASCIILogo';
-import QueueStatus from '@/components/QueueStatus';
-import { FileText, Image } from 'lucide-react';
+export const maxDuration = 60; // 60 seconds timeout
 
-export default function Home() {
-  const { entries, activeTab, setActiveTab } = useAppStore();
-  const hasData = entries.length > 0;
+interface CategorizeRequest {
+  entries: Array<{
+    id: number;
+    original_text: string;
+    translation_text: string;
+    level_id: number;
+  }>;
+}
 
-  return (
-    <div className="min-h-screen bg-black">
+interface CategorizeResponse {
+  results: Array<{
+    id: number;
+    categorization: CategorizationResult;
+  }>;
+  errors: Array<{
+    id: number;
+    error: string;
+  }>;
+}
 
-      <main className="px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8 flex justify-center">
-          <ASCIILogo />
-        </div>
+function createCategorizationPrompt(entry: CategorizeRequest['entries'][0]): string {
+  return `Categorize the following vocabulary word for image generation suitability.
+Word: ${entry.original_text}
+Translation: ${entry.translation_text}
+Context: English language learning, level ${entry.level_id}
+
+Analyze and categorize based on:
+- Concrete/Abstract nature
+- Visual representation potential (HIGH/MEDIUM/LOW)
+- Word type (noun/verb/adjective/adverb/phrase)
+- For polysemous words, identify primary meaning
+- Suggest transformation strategy if abstract
+
+Output JSON only, matching this exact structure with valid values:
+{
+  "primary_category": "CONCRETE-VISUAL" | "ABSTRACT-SYMBOLIC" | "ACTION-VISUAL" | "STATE-METAPHORICAL",
+  "image_suitability": "HIGH" | "MEDIUM" | "LOW",
+  "word_type": "noun" | "verb" | "adjective" | "adverb" | "phrase",
+  "transformation_needed": boolean, // e.g., true or false
+  "transformation_suggestion": "string", // e.g., "represent 'happiness' with a smiling emoji face" or "" if not needed
+  "confidence": number // 0.0-1.0
+}
+
+Example of a valid JSON output:
+{
+  "primary_category": "ABSTRACT-SYMBOLIC",
+  "image_suitability": "MEDIUM",
+  "word_type": "noun",
+  "transformation_needed": true,
+  "transformation_suggestion": "Visualize as an idea lightbulb",
+  "confidence": 0.85
+}`;
+}
+
+async function categorizeEntry(entry: CategorizeRequest['entries'][0]): Promise<CategorizationResult> {
+  const prompt = createCategorizationPrompt(entry);
+  
+  try {
+    console.log(`Sending categorization request for "${entry.original_text}"`);
+    console.log('Using OpenRouter with model:', process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-preview-05-20');
+    
+    const response = await callOpenRouter([
+      {
+        role: 'system',
+        content: 'You are a helpful assistant that categorizes vocabulary words for image generation suitability. Output only valid JSON. No explanations.'
+      },
+      {
+        role: 'user',
+        content: prompt
+      }
+    ], {
+      temperature: 0.1,
+      max_tokens: 8192,
+      response_format: { type: 'json_object' }
+    });
+    
+    console.log(`OpenRouter response for "${entry.original_text}":`, response);
+    
+    // Parse the response
+    let jsonText = response.trim();
+    
+    // Remove markdown code blocks if present
+    if (jsonText.includes('```json')) {
+      jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    } else if (jsonText.includes('```')) {
+      jsonText = jsonText.replace(/```\s*/g, '').trim();
+    }
+    
+    // Extract JSON object if there's extra text
+    const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+    jsonText = jsonMatch ? jsonMatch[0] : jsonText;
+    
+    console.log(`[Categorization] Attempting to parse JSON for entry ID ${entry.id}:`, jsonText);
+    let categorization: CategorizationResult;
+    try {
+      categorization = JSON.parse(jsonText) as CategorizationResult;
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError);
+      console.error('Failed to parse text:', jsonText);
+      console.error('Original response text:', response);
+      throw new Error(`JSON parse error: ${parseError instanceof Error ? parseError.message : 'Unknown parse error'}`);
+    }
+    console.log(`[Categorization] Successfully parsed categorization for entry ID ${entry.id}:`, categorization);
+    
+    // Validate the response structure
+    if (!categorization.primary_category || !categorization.image_suitability || categorization.word_type === undefined) {
+      throw new Error('Invalid categorization response structure');
+    }
+    
+    // Ensure boolean type for transformation_needed
+    categorization.transformation_needed = Boolean(categorization.transformation_needed);
+    
+    // Ensure string type for transformation_suggestion
+    categorization.transformation_suggestion = categorization.transformation_suggestion || '';
+    
+    // Ensure confidence is a number between 0 and 1
+    categorization.confidence = Math.max(0, Math.min(1, Number(categorization.confidence) || 0.5));
+    
+    return categorization;
+  } catch (error) {
+    console.error(`[Categorization] Failed to categorize entry ID: ${entry.id}, Word: "${entry.original_text}". Error:`, error);
+    
+    // Use the OpenRouter error handler for better error messages
+    const errorInfo = handleOpenRouterError(error);
+    console.error('Handled error info:', errorInfo);
+    throw new Error(errorInfo.message);
+  }
+}
+
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: CategorizeRequest) => {
+    // Validate request
+    const validation = validateRequestArray(body.entries, 'entries');
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
+    }
+    
+    if (body.entries.length > 10) {
+      return NextResponse.json({ error: 'Invalid request: maximum 10 entries allowed per batch' }, { status: 400 });
+    }
+    
+    const response: CategorizeResponse = {
+      results: [],
+      errors: [],
+    };
+    
+    // Process entries in parallel
+    const promises = body.entries.map(async (entry) => {
+      try {
+        // Update status to processing
+        await languageCardRepository.update(entry.id, {
+          categorizationStatus: 'processing',
+        });
         
-        {!hasData ? (
-          <FileUpload />
-        ) : (
-          <>
-            <div className="mb-6 bg-gray-900 rounded-lg shadow-sm border border-gray-800">
-              <div className="border-b border-gray-800">
-                <nav className="flex -mb-px">
-                  <button
-                    onClick={() => setActiveTab('table')}
-                    className={`
-                      group inline-flex items-center px-6 py-4 text-sm font-medium transition-colors
-                      ${activeTab === 'table' ? 'tab-active' : 'tab-inactive'}
-                    `}
-                  >
-                    <FileText className="mr-2 h-4 w-4" />
-                    [TABLE]
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('gallery')}
-                    className={`
-                      group inline-flex items-center px-6 py-4 text-sm font-medium transition-colors
-                      ${activeTab === 'gallery' ? 'tab-active' : 'tab-inactive'}
-                    `}
-                  >
-                    <Image className="mr-2 h-4 w-4" />
-                    [GALLERY]
-                  </button>
-                </nav>
-              </div>
-              
-              <div className="p-6">
-                {activeTab === 'table' ? <DataTable /> : <Gallery />}
-              </div>
-            </div>
-          </>
-        )}
-      </main>
-      
-      {/* Queue Status - shows when there are items in queue */}
-      <QueueStatus />
-    </div>
-  );
+        // Categorize the entry
+        const categorization = await categorizeEntry(entry);
+        console.log(`Successfully categorized entry ${entry.id}:`, categorization);
+        
+        // Save categorization to database
+        await languageCardRepository.update(entry.id, {
+          categorization,
+          categorizationStatus: 'completed',
+        });
+        
+        response.results.push({
+          id: entry.id,
+          categorization,
+        });
+        console.log(`Added to results array. Current results length: ${response.results.length}`);
+      } catch (error) {
+        console.error(`=== ENTRY ${entry.id} ERROR ===`);
+        console.error(`Failed to categorize entry ${entry.id}:`, error);
+        console.error(`Entry details:`, {
+          id: entry.id,
+          original_text: entry.original_text,
+          translation_text: entry.translation_text,
+          level_id: entry.level_id
+        });
+        console.error('Error details:', {
+          message: error instanceof Error ? error.message : String(error),
+          name: error instanceof Error ? error.name : 'Unknown',
+          stack: error instanceof Error ? error.stack : 'No stack',
+        });
+        console.error(`=== END ENTRY ${entry.id} ERROR ===`);
+        
+        // Update status to error
+        await languageCardRepository.update(entry.id, {
+          categorizationStatus: 'error',
+        });
+        
+        response.errors.push({
+          id: entry.id,
+          error: `Word "${entry.original_text}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+        });
+      }
+    });
+    
+    await Promise.all(promises);
+    
+    console.log('Final response being sent:', {
+      resultsCount: response.results.length,
+      errorsCount: response.errors.length,
+      results: response.results,
+      errors: response.errors
+    });
+    
+    return NextResponse.json(response);
+  });
 }
 </file>
 
@@ -4165,6 +3521,1067 @@ export default function Gallery() {
 }
 </file>
 
+<file path="components/QueueStatus.tsx">
+'use client';
+
+import { useState, useEffect } from 'react';
+import { Clock, CheckCircle, XCircle, Loader } from 'lucide-react';
+
+interface QueueStatus {
+  total: number;
+  pending: number;
+  processing: number;
+  completed: number;
+  errors: number;
+  isProcessing: boolean;
+}
+
+export default function QueueStatus() {
+  const [status, setStatus] = useState<QueueStatus | null>(null);
+  const [isVisible, setIsVisible] = useState(false);
+
+  const fetchStatus = async () => {
+    try {
+      const response = await fetch('/api/queue-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'status' }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setStatus(data);
+        setIsVisible(data.total > 0);
+      }
+    } catch (error) {
+      console.error('Failed to fetch queue status:', error);
+    }
+  };
+
+  useEffect(() => {
+    // Initial fetch
+    fetchStatus();
+
+    // Poll every 2 seconds
+    const interval = setInterval(fetchStatus, 2000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!isVisible || !status) {
+    return null;
+  }
+
+  return (
+    <div className="fixed bottom-4 right-4 bg-gray-900 border border-gray-700 rounded-lg p-4 shadow-lg min-w-64 z-50">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-medium text-gray-100">Image Queue</h3>
+        <button
+          onClick={() => setIsVisible(false)}
+          className="text-gray-400 hover:text-gray-300"
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        {status.pending > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <Clock className="h-3 w-3 text-yellow-500" />
+            <span className="text-gray-300">Pending: {status.pending}</span>
+          </div>
+        )}
+
+        {status.processing > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <Loader className="h-3 w-3 text-blue-500 animate-spin" />
+            <span className="text-gray-300">Processing: {status.processing}</span>
+          </div>
+        )}
+
+        {status.completed > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <CheckCircle className="h-3 w-3 text-green-500" />
+            <span className="text-gray-300">Completed: {status.completed}</span>
+          </div>
+        )}
+
+        {status.errors > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <XCircle className="h-3 w-3 text-red-500" />
+            <span className="text-gray-300">Errors: {status.errors}</span>
+          </div>
+        )}
+
+        <div className="pt-2 border-t border-gray-700">
+          <div className="text-xs text-gray-400">
+            Total: {status.total} {status.isProcessing ? '(Active)' : '(Idle)'}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="lib/db/repository.ts">
+import { getDatabase } from './database';
+import { WordEntryTable } from './schema';
+import { WordEntry } from '@/types';
+
+export class LanguageCardRepository {
+  private get db() {
+    return getDatabase();
+  }
+
+  async create(entry: Omit<WordEntry, 'imageStatus' | 'promptStatus'>): Promise<WordEntry> {
+    const result = await this.db
+      .insertInto('word_entries')
+      .values({
+        id: entry.id,
+        original_text: entry.original_text,
+        translation_text: entry.translation_text,
+        level_id: entry.level_id,
+        transcription: entry.transcription,
+        prompt: entry.prompt || null,
+        image_url: entry.imageUrl || null,
+        image_status: 'none',
+        prompt_status: 'none',
+        categorization_status: 'none',
+        replicate_id: entry.replicateId || null,
+        qa_score: entry.qaScore || null,
+        image_generated_at: entry.imageGeneratedAt || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+
+    return this.mapToWordEntry(result);
+  }
+
+  async update(id: number, updates: Partial<WordEntry>): Promise<WordEntry | null> {
+    const dbUpdates: Partial<WordEntryTable> = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (updates.original_text !== undefined) dbUpdates.original_text = updates.original_text;
+    if (updates.translation_text !== undefined) dbUpdates.translation_text = updates.translation_text;
+    if (updates.level_id !== undefined) dbUpdates.level_id = updates.level_id;
+    if (updates.transcription !== undefined) dbUpdates.transcription = updates.transcription;
+    if (updates.prompt !== undefined) dbUpdates.prompt = updates.prompt || null;
+    if (updates.imageUrl !== undefined) dbUpdates.image_url = updates.imageUrl || null;
+    if (updates.imageStatus !== undefined) dbUpdates.image_status = updates.imageStatus;
+    if (updates.promptStatus !== undefined) dbUpdates.prompt_status = updates.promptStatus;
+    if (updates.replicateId !== undefined) dbUpdates.replicate_id = updates.replicateId || null;
+    if (updates.qaScore !== undefined) dbUpdates.qa_score = updates.qaScore || null;
+    if (updates.imageGeneratedAt !== undefined) dbUpdates.image_generated_at = updates.imageGeneratedAt || null;
+    
+    // Handle categorization updates
+    if (updates.categorization !== undefined) {
+      const cat = updates.categorization;
+      dbUpdates.categorization_primary_category = cat.primary_category;
+      dbUpdates.categorization_image_suitability = cat.image_suitability;
+      dbUpdates.categorization_word_type = (cat.word_type === undefined || cat.word_type === null) ? null : cat.word_type;
+      // Ensure explicit NULL if word_type is undefined or null from sanitized object
+      dbUpdates.categorization_transformation_needed = cat.transformation_needed ? 1 : 0;
+      dbUpdates.categorization_transformation_suggestion = cat.transformation_suggestion;
+      dbUpdates.categorization_confidence = cat.confidence;
+    }
+    if (updates.categorizationStatus !== undefined) dbUpdates.categorization_status = updates.categorizationStatus;
+
+    const result = await this.db
+      .updateTable('word_entries')
+      .set(dbUpdates)
+      .where('id', '=', id)
+      .returningAll()
+      .executeTakeFirst();
+
+    return result ? this.mapToWordEntry(result) : null;
+  }
+
+  async delete(id: number): Promise<boolean> {
+    const result = await this.db
+      .deleteFrom('word_entries')
+      .where('id', '=', id)
+      .execute();
+
+    return result.length > 0;
+  }
+
+  async findById(id: number): Promise<WordEntry | null> {
+    const result = await this.db
+      .selectFrom('word_entries')
+      .selectAll()
+      .where('id', '=', id)
+      .executeTakeFirst();
+
+    return result ? this.mapToWordEntry(result) : null;
+  }
+
+  async findAll(): Promise<WordEntry[]> {
+    const results = await this.db
+      .selectFrom('word_entries')
+      .selectAll()
+      .orderBy('id', 'asc')
+      .execute();
+
+    return results.map(this.mapToWordEntry);
+  }
+
+  async upsert(entry: WordEntry): Promise<WordEntry> {
+    const existing = await this.findById(entry.id);
+    
+    if (existing) {
+      return await this.update(entry.id, entry) || existing;
+    } else {
+      return await this.create(entry);
+    }
+  }
+
+  async bulkUpsert(entries: WordEntry[]): Promise<WordEntry[]> {
+    const results: WordEntry[] = [];
+    
+    // Use a transaction for better performance
+    await this.db.transaction().execute(async (trx) => {
+      for (const entry of entries) {
+        const existing = await trx
+          .selectFrom('word_entries')
+          .selectAll()
+          .where('id', '=', entry.id)
+          .executeTakeFirst();
+
+        let result: WordEntryTable;
+        
+        if (existing) {
+          result = await trx
+            .updateTable('word_entries')
+            .set({
+              original_text: entry.original_text,
+              translation_text: entry.translation_text,
+              level_id: entry.level_id,
+              transcription: entry.transcription,
+              prompt: entry.prompt || null,
+              image_url: entry.imageUrl || null,
+              image_status: entry.imageStatus,
+              prompt_status: entry.promptStatus,
+              categorization_status: entry.categorizationStatus || 'none',
+              replicate_id: entry.replicateId || null,
+              qa_score: entry.qaScore || null,
+              image_generated_at: entry.imageGeneratedAt || null,
+              updated_at: new Date().toISOString(),
+            })
+            .where('id', '=', entry.id)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+        } else {
+          result = await trx
+            .insertInto('word_entries')
+            .values({
+              id: entry.id,
+              original_text: entry.original_text,
+              translation_text: entry.translation_text,
+              level_id: entry.level_id,
+              transcription: entry.transcription,
+              prompt: entry.prompt || null,
+              image_url: entry.imageUrl || null,
+              image_status: entry.imageStatus,
+              prompt_status: entry.promptStatus,
+              categorization_status: entry.categorizationStatus || 'none',
+              replicate_id: entry.replicateId || null,
+              qa_score: entry.qaScore || null,
+              image_generated_at: entry.imageGeneratedAt || null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .returningAll()
+            .executeTakeFirstOrThrow();
+        }
+        
+        results.push(this.mapToWordEntry(result));
+      }
+    });
+    
+    return results;
+  }
+
+  private mapToWordEntry(row: WordEntryTable): WordEntry {
+    const entry: WordEntry = {
+      id: row.id,
+      original_text: row.original_text,
+      translation_text: row.translation_text,
+      level_id: row.level_id,
+      transcription: row.transcription,
+      prompt: row.prompt || undefined,
+      imageUrl: row.image_url || undefined,
+      imageStatus: row.image_status,
+      promptStatus: row.prompt_status,
+      replicateId: row.replicate_id || undefined,
+      qaScore: row.qa_score,
+      imageGeneratedAt: row.image_generated_at || undefined,
+    };
+    
+    // Map categorization if present
+    if (row.categorization_primary_category) {
+      entry.categorization = {
+        primary_category: row.categorization_primary_category,
+        image_suitability: row.categorization_image_suitability!,
+        word_type: row.categorization_word_type,
+        transformation_needed: row.categorization_transformation_needed === 1,
+        transformation_suggestion: row.categorization_transformation_suggestion || '',
+        confidence: row.categorization_confidence || 0,
+      };
+    }
+    
+    entry.categorizationStatus = row.categorization_status || 'none';
+    
+    return entry;
+  }
+}
+
+// Export singleton instance
+export const languageCardRepository = new LanguageCardRepository();
+</file>
+
+<file path="lib/batchUtils.ts">
+import { WordEntry } from '@/types';
+import { ApiResponse } from './apiClient';
+import { activityManager } from '@/components/ActivityLog';
+
+export interface BatchProcessorConfig<TPayload, TResult, TError> {
+  itemsToProcess: WordEntry[];
+  batchSize: number;
+  delayBetweenBatchesMs: number;
+  operationName: string;
+  getBatchPayload: (batch: WordEntry[]) => TPayload;
+  batchApiService: (payload: TPayload) => Promise<ApiResponse<any>>;
+  getSuccessItems: (responseData: any, batchItems: WordEntry[]) => TResult[];
+  getErrorItems: (responseData: any) => TError[];
+  processItemSuccess: (itemResult: TResult, originalEntry: WordEntry) => void;
+  processItemError: (itemError: TError, originalEntry?: WordEntry) => void;
+  onStartProcessingItem?: (entry: WordEntry) => void;
+}
+
+export interface BatchProcessorResult {
+  totalProcessed: number;
+  totalSuccess: number;
+  totalFailed: number;
+}
+
+export async function processBatch<TPayload, TResult extends { id: number }, TError extends { id?: number }>(
+  config: BatchProcessorConfig<TPayload, TResult, TError>
+): Promise<BatchProcessorResult> {
+  const {
+    itemsToProcess,
+    batchSize,
+    delayBetweenBatchesMs,
+    operationName,
+    getBatchPayload,
+    batchApiService,
+    getSuccessItems,
+    getErrorItems,
+    processItemSuccess,
+    processItemError,
+    onStartProcessingItem
+  } = config;
+  const operationKey = `batch-${operationName.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
+
+  let totalProcessed = 0;
+  let totalSuccess = 0;
+  let totalFailed = 0;
+
+  activityManager.addActivity(operationKey, `Starting ${operationName}...`, 'info');
+
+  const batches = [];
+  for (let i = 0; i < itemsToProcess.length; i += batchSize) {
+    batches.push(itemsToProcess.slice(i, i + batchSize));
+  }
+
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const batch = batches[batchIndex];
+    const batchNumber = batchIndex + 1;
+
+    if (onStartProcessingItem) {
+      batch.forEach(entry => onStartProcessingItem(entry));
+    }
+
+    activityManager.addActivity(
+      `${operationKey}-batch-${batchNumber}`,
+      `Processing batch ${batchNumber} of ${batches.length} (${batch.length} items)...`,
+      'info'
+    );
+
+    try {
+      const payload = getBatchPayload(batch);
+      const response = await batchApiService(payload);
+
+      if (response.error) {
+        activityManager.addActivity(
+          `${operationKey}-batch-${batchNumber}-error`,
+          `Batch ${batchNumber} failed: ${response.error}`,
+          'error'
+        );
+        
+        batch.forEach(entry => {
+          processItemError({ id: entry.id } as TError, entry);
+          totalFailed++;
+        });
+      } else if (response.data) {
+        const successItems = getSuccessItems(response.data, batch);
+        const errorItems = getErrorItems(response.data);
+
+        successItems.forEach(result => {
+          const originalEntry = batch.find(entry => entry.id === result.id);
+          if (originalEntry) {
+            processItemSuccess(result, originalEntry);
+            totalSuccess++;
+          }
+        });
+
+        errorItems.forEach(error => {
+          const originalEntry = error.id ? batch.find(entry => entry.id === error.id) : undefined;
+          processItemError(error, originalEntry);
+          totalFailed++;
+          
+          if (error.id && 'error' in error) {
+            const errorMessage = (error as any).error;
+            const entryText = originalEntry ? `Word "${originalEntry.original_text}" (ID: ${error.id})` : `Item ${error.id}`;
+            activityManager.addActivity(
+              `${operationKey}-item-${error.id}-error`,
+              `${entryText} failed: ${errorMessage}`,
+              'error'
+            );
+          }
+        });
+
+        activityManager.addActivity(
+          `${operationKey}-batch-${batchNumber}-complete`,
+          `Batch ${batchNumber} completed: ${successItems.length} successful, ${errorItems.length} failed`,
+          'success'
+        );
+      }
+
+      totalProcessed += batch.length;
+
+      if (batchIndex < batches.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, delayBetweenBatchesMs));
+      }
+    } catch (error) {
+      activityManager.addActivity(
+        `${operationKey}-batch-${batchNumber}-exception`,
+        `Batch ${batchNumber} encountered an error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'error'
+      );
+      
+      batch.forEach(entry => {
+        processItemError({ id: entry.id } as TError, entry);
+        totalFailed++;
+      });
+      
+      totalProcessed += batch.length;
+    }
+  }
+
+  activityManager.addActivity(
+    `${operationKey}-complete`,
+    `${operationName} completed: ${totalSuccess} successful, ${totalFailed} failed out of ${totalProcessed} processed`,
+    totalFailed === 0 ? 'success' : 'warning'
+  );
+
+  return {
+    totalProcessed,
+    totalSuccess,
+    totalFailed
+  };
+}
+</file>
+
+<file path="lib/replicateConfig.ts">
+// Centralized Replicate configuration - single source of truth
+export const REPLICATE_CONFIG = {
+  model: "fofr/sdxl-emoji:dee76b5afde21b0f01ed7925f0665b7e879c50ee718c5f78a9d38e04d523cc5e",
+  
+  // Image generation parameters
+  input: {
+    negative_prompt: "black skin, dark skin",
+    width: 1152,
+    height: 896,
+    num_outputs: 1,
+    num_inference_steps: 50,
+    guidance_scale: 7.5,
+    scheduler: "K_EULER" as const,
+    lora_scale: 0.6,
+    refine: "no_refiner" as const,
+    apply_watermark: false,
+    high_noise_frac: 0.8,
+    prompt_strength: 0.8,
+    disable_safety_checker: true,
+  }
+} as const;
+
+// Function to create input with prompt
+export function createReplicateInput(prompt: string) {
+  return {
+    ...REPLICATE_CONFIG.input,
+    prompt: `A TOK emoji of ${prompt}`,
+  };
+}
+
+// Function to get model identifier
+export function getReplicateModel() {
+  return REPLICATE_CONFIG.model;
+}
+</file>
+
+<file path="app/api/generate-prompt/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { getGeminiModel, formatSinglePrompt } from '@/lib/gemini';
+import { getPromptOverride } from '@/lib/promptOverrides';
+import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
+
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { english: string; russian: string; transcription: string }) => {
+    const validation = validateRequestBody(body, ['english', 'russian', 'transcription']);
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
+    }
+
+    const { english, russian, transcription } = body;
+
+    // Check for prompt override first
+    const override = getPromptOverride(english);
+    if (override) {
+      console.log(`Using prompt override for "${english}": "${override}"`);
+      return NextResponse.json({ prompt: override });
+    }
+
+    // Fall back to AI generation
+    const model = getGeminiModel();
+    const prompt = formatSinglePrompt(english, russian, transcription);
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+
+    // Parse the response to extract just the description
+    let finalPrompt = text;
+    try {
+      // Remove any markdown code blocks if present
+      const cleanedText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const parsed = JSON.parse(cleanedText);
+      finalPrompt = parsed.prompt || parsed.single_object || text;
+    } catch {
+      // If parsing fails, use the original text
+      console.log('Failed to parse AI response as JSON, using raw text:', text);
+    }
+
+    return NextResponse.json({ prompt: finalPrompt });
+  });
+}
+</file>
+
+<file path="app/api/generate-prompts-batch/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import {
+  callOpenRouter,
+  formatOpenRouterBatchPromptMessages,
+  BatchPromptEntry,
+} from '@/lib/openrouter';
+import { getPromptOverride } from '@/lib/promptOverrides';
+import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
+
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { entries: BatchPromptEntry[] }) => {
+    const validation = validateRequestArray(body.entries, 'entries');
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
+    }
+
+    const { entries } = body;
+
+    // Check for overrides first and separate entries
+    const overriddenResults: { id: number; prompt: string }[] = [];
+    const entriesToGenerate: BatchPromptEntry[] = [];
+
+    for (const entry of entries) {
+      const override = getPromptOverride(entry.english);
+      if (override) {
+        console.log(`Using prompt override for "${entry.english}": "${override}"`);
+        overriddenResults.push({ id: entry.id, prompt: override });
+      } else {
+        entriesToGenerate.push(entry);
+      }
+    }
+
+    let aiGeneratedResults: { id: number; prompt: string }[] = [];
+
+    // Only call AI for entries without overrides
+    if (entriesToGenerate.length > 0) {
+      const messages = formatOpenRouterBatchPromptMessages(entriesToGenerate);
+      const rawResponseContent = await callOpenRouter(messages);
+
+      console.log('Raw OpenRouter response content:', rawResponseContent);
+
+      // The content from callOpenRouter should be a stringified JSON if response_format is json_object
+      const responseText = typeof rawResponseContent === 'string' ? rawResponseContent : JSON.stringify(rawResponseContent);
+
+      let prompts;
+      try {
+        // Remove any markdown code blocks if present (good safeguard)
+        const cleanedText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        prompts = JSON.parse(cleanedText);
+      } catch (parseError) {
+        console.error('Failed to parse OpenRouter response:', parseError);
+        console.error('Response text from AI:', responseText);
+        return NextResponse.json(
+          { error: 'Failed to parse AI response' },
+          { status: 500 }
+        );
+      }
+
+      if (!Array.isArray(prompts)) {
+        console.error('Invalid response format from AI. Expected array, got:', prompts);
+        return NextResponse.json(
+          { error: 'Invalid response format from AI' },
+          { status: 500 }
+        );
+      }
+
+      const promptMap = new Map(prompts.map((p: { id: number; prompt?: string; single_object?: string }) => [
+        p.id, 
+        p.prompt || p.single_object || 'Failed to generate prompt'
+      ]));
+
+      aiGeneratedResults = entriesToGenerate.map(entry => ({
+        id: entry.id,
+        prompt: promptMap.get(entry.id) || 'Failed to generate prompt',
+      }));
+    }
+
+    // Combine overridden and AI-generated results, maintaining original order
+    const allResults = [...overriddenResults, ...aiGeneratedResults];
+    const sortedResults = allResults.sort((a, b) => a.id - b.id);
+
+    return NextResponse.json({ prompts: sortedResults });
+  });
+}
+</file>
+
+<file path="lib/imageQueue.ts">
+import Replicate from 'replicate';
+import { getReplicateModel, createReplicateInput } from './replicateConfig';
+import { saveImageFromUrl } from './imageUtils';
+
+if (!process.env.REPLICATE_API_TOKEN) {
+  console.error('REPLICATE_API_TOKEN is not set in environment variables');
+  throw new Error('REPLICATE_API_TOKEN is required but not set');
+}
+
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN!,
+});
+
+interface QueueItem {
+  id: string;
+  entryId: number;
+  englishWord: string;
+  prompt: string;
+  predictionId?: string;
+  status: 'pending' | 'processing' | 'completed' | 'error';
+  retries: number;
+  createdAt: Date;
+}
+
+class ImageGenerationQueue {
+  private queue: QueueItem[] = [];
+  private processing = false;
+  private maxRetries = 3;
+  private concurrentLimit = 1; // Process one at a time to avoid rate limits
+  private processingCount = 0;
+
+  // Add item to queue
+  async addToQueue(entryId: number, englishWord: string, prompt: string): Promise<string> {
+    // Check if this entry is already in queue
+    const existingItem = this.queue.find(item => item.entryId === entryId);
+    if (existingItem) {
+      console.log(`Entry ${entryId} (${englishWord}) already in queue with status: ${existingItem.status}`);
+      return existingItem.id;
+    }
+
+    const queueId = `queue-${Date.now()}-${entryId}`;
+    const item: QueueItem = {
+      id: queueId,
+      entryId,
+      englishWord,
+      prompt,
+      status: 'pending',
+      retries: 0,
+      createdAt: new Date(),
+    };
+
+    this.queue.push(item);
+    console.log(`Added to queue: ${englishWord} (${queueId}) - Total queue: ${this.queue.length}`);
+    
+    // Start processing if not already running
+    if (!this.processing) {
+      this.startProcessing();
+    }
+
+    return queueId;
+  }
+
+  // Start processing queue
+  private async startProcessing() {
+    if (this.processing) {
+      console.log('Processing already running, skipping...');
+      return;
+    }
+    
+    this.processing = true;
+    console.log(`Starting image queue processing... Total items: ${this.queue.length}`);
+
+    while (this.queue.length > 0) {
+      const pendingItems = this.queue.filter(item => item.status === 'pending');
+      console.log(`Queue status: Total=${this.queue.length}, Pending=${pendingItems.length}`);
+      
+      const item = pendingItems[0]; // Get first pending item
+      if (!item) {
+        console.log('No pending items, waiting...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+
+      console.log(`Processing next item: ${item.englishWord} (${item.id})`);
+      
+      // Process one item at a time (sequential processing)
+      await this.processItem(item);
+      
+      // Small delay between items to avoid overwhelming the API
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    this.processing = false;
+    console.log('Queue processing finished - no more items');
+  }
+
+  // Process individual item
+  private async processItem(item: QueueItem) {
+    while (item.status === 'pending' && item.retries < this.maxRetries) {
+      try {
+        console.log(`Processing: ${item.englishWord} (${item.id}) - Attempt ${item.retries + 1}`);
+        item.status = 'processing';
+
+        // Create prediction (async) using centralized config
+        const prediction = await replicate.predictions.create({
+          version: getReplicateModel(),
+          input: createReplicateInput(item.prompt),
+        });
+
+        item.predictionId = prediction.id;
+        console.log(`Created prediction: ${prediction.id} for ${item.englishWord}`);
+
+        // Wait for completion
+        const result = await replicate.wait(prediction);
+        
+        if (result.status === 'succeeded' && result.output) {
+          await this.handleSuccess(item, result.output);
+          return; // Success - exit the retry loop
+        } else {
+          throw new Error(`Prediction failed: ${result.error || 'Unknown error'}`);
+        }
+
+      } catch (error) {
+        console.error(`Attempt ${item.retries + 1} failed for ${item.englishWord}:`, error);
+        item.retries++;
+        
+        if (item.retries < this.maxRetries) {
+          console.log(`Retrying ${item.englishWord} (attempt ${item.retries + 1}/${this.maxRetries}) after delay`);
+          item.status = 'pending';
+          // Add delay before retry (exponential backoff)
+          await new Promise(resolve => setTimeout(resolve, 5000 * item.retries));
+        } else {
+          console.error(`Max retries reached for ${item.englishWord} (${item.id})`);
+          item.status = 'error';
+          
+          // Notify error
+          this.notifyError(item, (error as Error).message || 'Generation failed');
+          
+          // Remove from queue
+          this.removeFromQueue(item.id);
+          return; // Exit retry loop
+        }
+      }
+    }
+  }
+
+  // Handle successful generation
+  private async handleSuccess(item: QueueItem, output: any) {
+    try {
+      console.log(`Success: ${item.englishWord} (${item.id})`);
+      
+      // Get image URL from output
+      let imageUrl: string;
+      if (Array.isArray(output) && output.length > 0) {
+        const fileOutput = output[0] as any;
+        imageUrl = fileOutput.url ? fileOutput.url().toString() : fileOutput.toString();
+      } else {
+        throw new Error('Invalid output format');
+      }
+
+      // Download and save image with resizing
+      const downloadResult = await saveImageFromUrl(imageUrl, item.entryId, {
+        resize: {
+          width: 1110,
+          height: 834,
+          fit: 'cover'
+        }
+      });
+      
+      item.status = 'completed';
+      
+      // Notify completion via callback or event
+      this.notifyCompletion(item, {
+        imageUrl: downloadResult.localImageUrl,
+        originalUrl: downloadResult.originalUrl,
+        generatedAt: new Date().toISOString(),
+      });
+
+      // Remove from queue
+      this.removeFromQueue(item.id);
+
+    } catch (error) {
+      console.error(`Error processing success for ${item.englishWord}:`, error);
+      throw error; // Re-throw to be handled by processItem
+    }
+  }
+
+
+  // Remove item from queue
+  private removeFromQueue(queueId: string) {
+    const index = this.queue.findIndex(item => item.id === queueId);
+    if (index > -1) {
+      const item = this.queue[index];
+      this.queue.splice(index, 1);
+      console.log(`Removed from queue: ${item.englishWord} (${queueId}) - Remaining: ${this.queue.length}`);
+    } else {
+      console.log(`Item not found in queue for removal: ${queueId}`);
+    }
+  }
+
+  // Get queue status
+  getQueueStatus() {
+    const status = {
+      total: this.queue.length,
+      pending: this.queue.filter(item => item.status === 'pending').length,
+      processing: this.queue.filter(item => item.status === 'processing').length,
+      completed: this.queue.filter(item => item.status === 'completed').length,
+      errors: this.queue.filter(item => item.status === 'error').length,
+      isProcessing: this.processing,
+    };
+    
+    return status;
+  }
+
+  // Get queue items
+  getQueueItems() {
+    return this.queue.map(item => ({
+      id: item.id,
+      entryId: item.entryId,
+      englishWord: item.englishWord,
+      status: item.status,
+      retries: item.retries,
+      createdAt: item.createdAt,
+      predictionId: item.predictionId,
+    }));
+  }
+
+  // Callback methods (to be overridden)
+  protected notifyCompletion(item: QueueItem, result: any) {
+    // Override this method to handle completion
+    console.log(`✅ Completed: ${item.englishWord}`);
+  }
+
+  protected notifyError(item: QueueItem, error: string) {
+    // Override this method to handle errors
+    console.log(`❌ Error: ${item.englishWord} - ${error}`);
+  }
+
+  protected notifyProgress(item: QueueItem, status: string) {
+    // Override this method to handle progress updates
+    console.log(`🔄 Progress: ${item.englishWord} - ${status}`);
+  }
+}
+
+// Export singleton instance
+export const imageQueue = new ImageGenerationQueue();
+export type { QueueItem };
+</file>
+
+<file path="store/useAppStore.ts">
+import { create } from 'zustand';
+import { WordEntry, AppState } from '@/types';
+
+interface AppStore extends AppState {
+  setEntries: (entries: WordEntry[]) => void;
+  updateEntry: (id: number, updates: Partial<WordEntry>) => void;
+  setCurrentPage: (page: number) => void;
+  setItemsPerPage: (items: number) => void;
+  setSearchQuery: (query: string) => void;
+  setLevelFilter: (level: number | null) => void;
+  setSortBy: (field: string) => void;
+  setSortOrder: (order: 'asc' | 'desc') => void;
+  setActiveTab: (tab: 'table' | 'gallery') => void;
+  getFilteredEntries: () => WordEntry[];
+  clearData: () => void;
+  syncWithDatabase: () => Promise<void>;
+  loadFromDatabase: () => Promise<void>;
+  isInitialized: boolean;
+}
+
+const initialState: AppState = {
+  entries: [],
+  currentPage: 1,
+  itemsPerPage: 100,
+  searchQuery: '',
+  levelFilter: null,
+  sortBy: 'id',
+  sortOrder: 'asc',
+  activeTab: 'table',
+};
+
+export const useAppStore = create<AppStore>()((set, get) => ({
+      ...initialState,
+      isInitialized: false,
+      
+      setEntries: async (entries) => {
+        set({ entries, currentPage: 1 });
+        
+        // Sync to database in background
+        try {
+          await fetch('/api/language-cards', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(entries),
+          });
+        } catch (error) {
+          console.error('Failed to sync entries to database:', error);
+        }
+      },
+      
+      updateEntry: async (id, updates) => {
+        set((state) => ({
+          entries: state.entries.map((entry) =>
+            entry.id === id ? { ...entry, ...updates } : entry
+          ),
+        }));
+        
+        // Update in database
+        try {
+          await fetch('/api/language-cards', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, updates }),
+          });
+        } catch (error) {
+          console.error('Failed to update entry in database:', error);
+        }
+      },
+      
+      setCurrentPage: (currentPage) => set({ currentPage }),
+      setItemsPerPage: (itemsPerPage) => set({ itemsPerPage, currentPage: 1 }),
+      setSearchQuery: (searchQuery) => set({ searchQuery, currentPage: 1 }),
+      setLevelFilter: (levelFilter) => set({ levelFilter, currentPage: 1 }),
+      setSortBy: (sortBy) => set({ sortBy }),
+      setSortOrder: (sortOrder) => set({ sortOrder }),
+      setActiveTab: (activeTab) => set({ activeTab }),
+      
+      getFilteredEntries: () => {
+        const state = get();
+        let filtered = [...state.entries];
+        
+        // Apply search filter
+        if (state.searchQuery) {
+          const query = state.searchQuery.toLowerCase();
+          filtered = filtered.filter(
+            (entry) =>
+              entry.original_text.toLowerCase().includes(query) ||
+              entry.translation_text.toLowerCase().includes(query) ||
+              entry.transcription.toLowerCase().includes(query) ||
+              (entry.prompt && entry.prompt.toLowerCase().includes(query))
+          );
+        }
+        
+        // Apply level filter
+        if (state.levelFilter !== null) {
+          filtered = filtered.filter((entry) => entry.level_id === state.levelFilter);
+        }
+        
+        // Apply sorting
+        filtered.sort((a, b) => {
+          let aVal = a[state.sortBy as keyof WordEntry];
+          let bVal = b[state.sortBy as keyof WordEntry];
+          
+          if (aVal === undefined || bVal === undefined) return 0;
+          
+          if (typeof aVal === 'string' && typeof bVal === 'string') {
+            aVal = aVal.toLowerCase();
+            bVal = bVal.toLowerCase();
+          }
+          
+          if (aVal < bVal) return state.sortOrder === 'asc' ? -1 : 1;
+          if (aVal > bVal) return state.sortOrder === 'asc' ? 1 : -1;
+          return 0;
+        });
+        
+        return filtered;
+      },
+      
+      clearData: async () => {
+        set(initialState);
+        // Note: We don't clear the database here to preserve data
+      },
+      
+      syncWithDatabase: async () => {
+        const state = get();
+        if (state.entries.length > 0) {
+          try {
+            await fetch('/api/language-cards', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(state.entries),
+            });
+          } catch (error) {
+            console.error('Failed to sync with database:', error);
+          }
+        }
+      },
+      
+      loadFromDatabase: async () => {
+        try {
+          const response = await fetch('/api/language-cards');
+          if (response.ok) {
+            const entries = await response.json();
+            if (entries.length > 0) {
+              set({ entries, isInitialized: true });
+            } else {
+              set({ isInitialized: true });
+            }
+          } else {
+            set({ isInitialized: true });
+          }
+        } catch (error) {
+          console.error('Failed to load from database:', error);
+          set({ isInitialized: true });
+        }
+      },
+    }));
+
+// Initialize database on first load
+if (typeof window !== 'undefined') {
+  useAppStore.getState().loadFromDatabase();
+}
+</file>
+
 <file path="types/index.ts">
 export interface CategorizationResult {
   primary_category: 'CONCRETE-VISUAL' | 'ABSTRACT-SYMBOLIC' | 'ACTION-VISUAL' | 'STATE-METAPHORICAL';
@@ -4209,96 +4626,6 @@ export interface JSONImportData {
   translation_text: string;
   level_id: number;
   transcription: string;
-}
-</file>
-
-<file path="next.config.ts">
-import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
-  images: {
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'replicate.delivery',
-        pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: 'pbxt.replicate.delivery',
-        pathname: '/**',
-      },
-    ],
-  },
-  // Disable the Next.js dev indicator completely
-  devIndicators: false,
-  // Fix file watching issues
-  webpack: (config, { dev, isServer }) => {
-    if (dev && !isServer) {
-      config.watchOptions = {
-        ...config.watchOptions,
-        ignored: [
-          '**/node_modules',
-          '**/.next',
-          '**/.git',
-          '**/public/images', // Also ignore generated images
-        ],
-      };
-    }
-    return config;
-  },
-  // Use polling for more stable file watching
-  webpackDevMiddleware: (config) => {
-    config.watchOptions = {
-      poll: 1000, // Check for changes every second
-      aggregateTimeout: 300, // Delay rebuild after change detection
-      ignored: /node_modules/,
-    };
-    return config;
-  },
-};
-
-export default nextConfig;
-</file>
-
-<file path="package.json">
-{
-  "name": "sdxl-emoji-pipeline",
-  "version": "0.1.0",
-  "private": true,
-  "scripts": {
-    "dev": "next dev --turbopack",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
-  },
-  "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "@tailwindcss/postcss": "^4.1.7",
-    "@tanstack/react-table": "^8.21.3",
-    "axios": "^1.9.0",
-    "better-sqlite3": "^11.10.0",
-    "kysely": "^0.28.2",
-    "lucide-react": "^0.511.0",
-    "next": "15.3.2",
-    "postcss": "^8.5.3",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-dropzone": "^14.3.8",
-    "react-hot-toast": "^2.5.2",
-    "replicate": "^1.0.1",
-    "tailwindcss": "^4.1.7",
-    "zustand": "^5.0.5"
-  },
-  "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9.27.0",
-    "eslint-config-next": "^15.3.3",
-    "typescript": "^5"
-  }
 }
 </file>
 
@@ -4426,10 +4753,180 @@ npm run dev
 - Параметры: lora_scale: 0.6, guidance_scale: 7.5, num_inference_steps: 50
 </file>
 
+<file path="app/page.tsx">
+'use client';
+
+import { useState } from 'react';
+import { useAppStore } from '@/store/useAppStore';
+import FileUpload from '@/components/FileUpload';
+import DataTable from '@/components/DataTable';
+import Gallery from '@/components/Gallery';
+import ASCIILogo from '@/components/ASCIILogo';
+import QueueStatus from '@/components/QueueStatus';
+import { FileText, Image } from 'lucide-react';
+
+export default function Home() {
+  const { entries, activeTab, setActiveTab, isInitialized } = useAppStore();
+  const hasData = entries.length > 0;
+
+  // Show loading state if store isn't initialized yet
+  if (!isInitialized) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="text-center">
+          <div className="mb-4">
+            <ASCIILogo />
+          </div>
+          <div className="text-gray-400">Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-black">
+      <main className="px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-8 flex justify-center">
+          <ASCIILogo />
+        </div>
+        
+        {!hasData ? (
+          <FileUpload />
+        ) : (
+          <>
+            <div className="mb-6 bg-gray-900 rounded-lg shadow-sm border border-gray-800">
+              <div className="border-b border-gray-800">
+                <nav className="flex -mb-px">
+                  <button
+                    onClick={() => setActiveTab('table')}
+                    className={`
+                      group inline-flex items-center px-6 py-4 text-sm font-medium transition-colors
+                      ${activeTab === 'table' ? 'tab-active' : 'tab-inactive'}
+                    `}
+                  >
+                    <FileText className="mr-2 h-4 w-4" />
+                    [TABLE]
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('gallery')}
+                    className={`
+                      group inline-flex items-center px-6 py-4 text-sm font-medium transition-colors
+                      ${activeTab === 'gallery' ? 'tab-active' : 'tab-inactive'}
+                    `}
+                  >
+                    <Image className="mr-2 h-4 w-4" />
+                    [GALLERY]
+                  </button>
+                </nav>
+              </div>
+              
+              <div className="p-6">
+                {activeTab === 'table' ? <DataTable /> : <Gallery />}
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+      
+      {/* Queue Status - shows when there are items in queue */}
+      <QueueStatus />
+    </div>
+  );
+}
+</file>
+
+<file path="next.config.ts">
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'replicate.delivery',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'pbxt.replicate.delivery',
+        pathname: '/**',
+      },
+    ],
+  },
+  // Disable the Next.js dev indicator completely
+  devIndicators: false,
+  // Fix file watching issues (only when not using Turbopack)
+  webpack: (config, { dev, isServer }) => {
+    // Check if Turbopack is being used
+    const isTurbopack = process.env.TURBOPACK === '1' || process.argv.includes('--turbopack');
+    
+    if (dev && !isServer && !isTurbopack) {
+      config.watchOptions = {
+        poll: 1000, // Check for changes every second
+        aggregateTimeout: 300, // Delay rebuild after change detection
+        ignored: [
+          '**/node_modules',
+          '**/.next',
+          '**/.git',
+          '**/public/images', // Also ignore generated images
+        ],
+      };
+    }
+    return config;
+  },
+};
+
+export default nextConfig;
+</file>
+
+<file path="package.json">
+{
+  "name": "sdxl-emoji-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@tailwindcss/postcss": "^4.1.7",
+    "@tanstack/react-table": "^8.21.3",
+    "axios": "^1.9.0",
+    "better-sqlite3": "^11.10.0",
+    "js-yaml": "^4.1.0",
+    "kysely": "^0.28.2",
+    "lucide-react": "^0.511.0",
+    "next": "15.3.2",
+    "postcss": "^8.5.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-dropzone": "^14.3.8",
+    "react-hot-toast": "^2.5.2",
+    "replicate": "^1.0.1",
+    "sharp": "^0.34.2",
+    "tailwindcss": "^4.1.7",
+    "zustand": "^5.0.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9.27.0",
+    "eslint-config-next": "^15.3.3",
+    "typescript": "^5"
+  }
+}
+</file>
+
 <file path="components/DataTable.tsx">
 'use client';
 
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -4444,11 +4941,13 @@ import { WordEntry } from '@/types';
 import { ChevronUp, ChevronDown, Search, Filter, Sparkles, ImageIcon, Edit2, Save, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { activityManager } from './ActivityLog';
+import { BatchActionMenu } from './BatchActionMenu';
 import {
   generatePromptService,
   queueImageService,
   generatePromptsBatchService,
   categorizeVocabularyService,
+  batchGenerateImagesService,
 } from '@/lib/apiClient';
 import { processBatch } from '@/lib/batchUtils';
 
@@ -4459,27 +4958,21 @@ export default function DataTable() {
     currentPage,
     setCurrentPage,
     itemsPerPage,
-    setItemsPerPage,
     searchQuery,
     setSearchQuery,
-    levelFilter,
-    setLevelFilter,
     getFilteredEntries,
   } = useAppStore();
 
   const [sorting, setSorting] = useState<SortingState>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<string>('');
-  const [showBatchMenu, setShowBatchMenu] = useState(false);
-  const [showCategorizationMenu, setShowCategorizationMenu] = useState(false);
   const [imageFilter, setImageFilter] = useState<'all' | 'with' | 'without' | 'bad'>('all');
   const [promptFilter, setPromptFilter] = useState<'all' | 'with' | 'without'>('all');
   const [categorizationFilter, setCategorizationFilter] = useState<'all' | 'uncategorized' | 'categorized'>('all');
   const [suitabilityFilter, setSuitabilityFilter] = useState<'all' | 'HIGH' | 'MEDIUM' | 'LOW'>('all');
   const [customCategorizeCount, setCustomCategorizeCount] = useState<string>('10');
   const [customBatchGenerateCount, setCustomBatchGenerateCount] = useState<string>('10');
-  const batchMenuRef = useRef<HTMLDivElement>(null);
-  const categorizationMenuRef = useRef<HTMLDivElement>(null);
+  const [customImageBatchCount, setCustomImageBatchCount] = useState<string>('20');
 
   const filteredData = useMemo(() => {
     let data = getFilteredEntries();
@@ -4523,25 +5016,6 @@ export default function DataTable() {
     return data;
   }, [getFilteredEntries, entries, imageFilter, promptFilter, categorizationFilter, suitabilityFilter]);
 
-  // Click outside handler for menus
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (batchMenuRef.current && !batchMenuRef.current.contains(event.target as Node)) {
-        setShowBatchMenu(false);
-      }
-      if (categorizationMenuRef.current && !categorizationMenuRef.current.contains(event.target as Node)) {
-        setShowCategorizationMenu(false);
-      }
-    };
-
-    if (showBatchMenu || showCategorizationMenu) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showBatchMenu, showCategorizationMenu]);
 
   const handleGeneratePrompt = async (entry: WordEntry) => {
     const operationKey = `prompt-${entry.id}`;
@@ -4636,7 +5110,7 @@ export default function DataTable() {
         })),
       }),
       batchApiService: generatePromptsBatchService,
-      getSuccessItems: (responseData) => responseData.prompts || [],
+      getSuccessItems: (responseData, batchItems) => responseData.prompts || [],
       getErrorItems: (responseData) => [], // generatePromptsBatchService doesn't return separate errors array
       processItemSuccess: (result, originalEntry) => {
         updateEntry(result.id, {
@@ -4682,7 +5156,7 @@ export default function DataTable() {
         })),
       }),
       batchApiService: categorizeVocabularyService,
-      getSuccessItems: (responseData) => responseData.results || [],
+      getSuccessItems: (responseData, batchItems) => responseData.results || [],
       getErrorItems: (responseData) => responseData.errors || [],
       processItemSuccess: (result, originalEntry) => {
         updateEntry(result.id, {
@@ -4703,28 +5177,117 @@ export default function DataTable() {
     toast.success(`Categorized ${result.totalSuccess} words`);
   };
 
-  const handleCustomBatchCategorize = async () => {
-    const count = parseInt(customCategorizeCount, 10);
-    
-    if (isNaN(count) || count <= 0) {
-      toast.error('Please enter a valid positive number for batch size.');
-      return;
-    }
-    
+  const handleCustomBatchCategorize = async (count: number) => {
     handleBatchCategorize(count);
-    setShowCategorizationMenu(false);
   };
 
-  const handleCustomBatchGeneratePrompts = async () => {
-    const count = parseInt(customBatchGenerateCount, 10);
+  const handleCustomBatchGeneratePrompts = async (count: number) => {
+    handleBatchGeneratePrompts(count);
+  };
+
+  const startBatchImageGeneration = async (input: number | WordEntry[]) => {
+    let itemsToProcess: WordEntry[];
     
-    if (isNaN(count) || count <= 0) {
-      toast.error('Please enter a valid positive number for batch size.');
+    if (typeof input === 'number') {
+      // Filter for entries that are eligible for image generation, excluding already queued/processing items
+      itemsToProcess = filteredData
+        .filter(entry => 
+          entry.prompt && 
+          entry.prompt.trim() !== '' && 
+          entry.imageStatus !== 'queued' && 
+          entry.imageStatus !== 'processing' && 
+          (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+        )
+        .slice(0, input);
+    } else {
+      // Input is already a pre-filtered array
+      itemsToProcess = input;
+    }
+
+    if (itemsToProcess.length === 0) {
+      toast.error('No eligible entries found for image generation.');
+      return;
+    }
+
+    const result = await processBatch({
+      itemsToProcess,
+      batchSize: 20, // Number of WordEntry items to group into a single call to /api/generate-images-batch
+      delayBetweenBatchesMs: 300,
+      operationName: 'Batch Image Enqueuing',
+      getBatchPayload: (batch) => ({
+        entries: batch.map(entry => ({
+          entryId: entry.id,
+          prompt: entry.prompt!,
+          englishWord: entry.original_text
+        }))
+      }),
+      batchApiService: batchGenerateImagesService,
+      getSuccessItems: (responseData, batchItems) => {
+        if (!responseData.success) return [];
+        const errorEntryIds = new Set(responseData.errors?.map((e: any) => e.entryId) || []);
+        return batchItems.filter(item => !errorEntryIds.has(item.id)).map(item => ({ 
+          id: item.id, 
+          serverMessage: responseData.message 
+        }));
+      },
+      getErrorItems: (responseData) => responseData.errors || [],
+      processItemSuccess: (result, originalEntry) => {
+        // Item was successfully queued by the server as part of a batch API call.
+        // Status already updated to 'queued' by onStartProcessingItem.
+        // activityManager.addActivity('info', `Image for "${originalEntry.original_text}" (ID: ${originalEntry.id}) added to generation queue.`);
+      },
+      processItemError: (itemError, originalEntry) => {
+        if (originalEntry) {
+          updateEntry(originalEntry.id, { imageStatus: 'error' });
+          activityManager.addActivity('error', `Failed to queue image for "${originalEntry.original_text}" (ID: ${originalEntry.id})`, itemError.error);
+        } else if ((itemError as any).entryId) {
+          activityManager.addActivity('error', `Failed to queue image for entry ID ${(itemError as any).entryId}`, itemError.error);
+        } else {
+          activityManager.addActivity('error', 'An item failed to queue for image generation', itemError.error);
+        }
+      },
+      onStartProcessingItem: (entry) => {
+        updateEntry(entry.id, { imageStatus: 'queued' });
+      },
+    });
+
+    activityManager.addActivity('info', `Batch image enqueuing process initiated. ${result.totalSuccess} items acknowledged by server, ${result.totalFailed} items had enqueuing issues. Monitor queue status for generation progress.`);
+  };
+
+  const handleCustomBatchGenerateImages = async (count: number) => {
+    // Get eligible entries once, excluding already queued/processing items
+    const eligibleEntries = filteredData.filter(entry => 
+      entry.prompt && 
+      entry.prompt.trim() !== '' && 
+      entry.imageStatus !== 'queued' && 
+      entry.imageStatus !== 'processing' && 
+      (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+    );
+    
+    if (eligibleEntries.length === 0) {
+      toast.error('No eligible entries found for image generation.');
       return;
     }
     
-    handleBatchGeneratePrompts(count);
-    setShowBatchMenu(false);
+    const itemsForThisRun = eligibleEntries.slice(0, count);
+    await startBatchImageGeneration(itemsForThisRun);
+  };
+
+  const handleBatchGenerateAllEligibleImages = async () => {
+    const eligibleEntries = filteredData.filter(entry => 
+      entry.prompt && 
+      entry.prompt.trim() !== '' && 
+      entry.imageStatus !== 'queued' && 
+      entry.imageStatus !== 'processing' && 
+      (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+    );
+    
+    if (eligibleEntries.length === 0) {
+      toast.error('No eligible entries found for image generation.');
+      return;
+    }
+    
+    await startBatchImageGeneration(eligibleEntries);
   };
 
   const columns = useMemo<ColumnDef<WordEntry>[]>(
@@ -5002,102 +5565,60 @@ export default function DataTable() {
           <option value="LOW">Low Suitability</option>
         </select>
 
-        {/* Batch Generate Button */}
-        <div className="relative" ref={batchMenuRef}>
-          <button
-            onClick={() => setShowBatchMenu(!showBatchMenu)}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Sparkles className="h-4 w-4" />
-            Batch Generate
-          </button>
-          
-          {showBatchMenu && (
-            <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
-              <div className="p-2">
-                <div className="mb-2">
-                  <div className="text-xs text-gray-400 mb-1">Generate prompts for:</div>
-                  <input
-                    type="number"
-                    value={customBatchGenerateCount}
-                    onChange={(e) => setCustomBatchGenerateCount(e.target.value)}
-                    placeholder="Number of words"
-                    className="input-field w-full text-sm px-3 py-2"
-                    min="1"
-                    aria-label="Number of prompts to generate"
-                  />
-                  <button
-                    onClick={handleCustomBatchGeneratePrompts}
-                    disabled={!customBatchGenerateCount || parseInt(customBatchGenerateCount, 10) <= 0}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-1"
-                  >
-                    Generate First {customBatchGenerateCount || 'N'} Prompts
-                  </button>
-                </div>
-                <div className="border-t border-gray-700 my-2"></div>
-                <button
-                  onClick={() => {
-                    const allWithoutPromptsCount = filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length;
-                    if (allWithoutPromptsCount > 0) {
-                      handleBatchGeneratePrompts(allWithoutPromptsCount);
-                    } else {
-                      toast.error('No entries without prompts found');
-                    }
-                    setShowBatchMenu(false);
-                  }}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
-                >
-                  All without prompts ({filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length})
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        {/* Batch Generate Prompts Menu */}
+        <BatchActionMenu
+          triggerButtonLabel="Batch Generate"
+          triggerButtonIcon={<Sparkles className="h-4 w-4" />}
+          menuTitle="Generate prompts for:"
+          countInputState={[customBatchGenerateCount, setCustomBatchGenerateCount]}
+          onCustomCountAction={handleCustomBatchGeneratePrompts}
+          customCountActionLabel={(count) => `Generate First ${count || 'N'} Prompts`}
+          onAllEligibleAction={() => {
+            const allWithoutPromptsCount = filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length;
+            if (allWithoutPromptsCount > 0) {
+              handleBatchGeneratePrompts(allWithoutPromptsCount);
+            } else {
+              toast.error('No entries without prompts found');
+            }
+          }}
+          allEligibleActionLabel="All without prompts"
+          getEligibleCount={() => filteredData.filter(e => !e.prompt || e.prompt.trim() === '').length}
+        />
 
-        {/* Categorization Button */}
-        <div className="relative" ref={categorizationMenuRef}>
-          <button
-            onClick={() => setShowCategorizationMenu(!showCategorizationMenu)}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Filter className="h-4 w-4" />
-            Categorize (TIAC)
-          </button>
-          
-          {showCategorizationMenu && (
-            <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
-              <div className="p-2">
-                <div className="text-xs text-gray-400 mb-2">Categorize vocabulary for:</div>
-                <input
-                  type="number"
-                  value={customCategorizeCount}
-                  onChange={(e) => setCustomCategorizeCount(e.target.value)}
-                  placeholder="Number of words"
-                  className="input-field w-full text-sm px-3 py-2 mb-2"
-                  min="1"
-                  aria-label="Number of words to categorize"
-                />
-                <button
-                  onClick={handleCustomBatchCategorize}
-                  disabled={!customCategorizeCount || parseInt(customCategorizeCount, 10) <= 0}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Categorize First {customCategorizeCount || 'N'} Words
-                </button>
-                <button
-                  onClick={() => {
-                    const allWithoutCategorization = filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length;
-                    handleBatchCategorize(allWithoutCategorization);
-                    setShowCategorizationMenu(false);
-                  }}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors border-t border-gray-700 mt-2 pt-2"
-                >
-                  All uncategorized ({filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length})
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        {/* Categorization Menu */}
+        <BatchActionMenu
+          triggerButtonLabel="Categorize (TIAC)"
+          triggerButtonIcon={<Filter className="h-4 w-4" />}
+          menuTitle="Categorize vocabulary for:"
+          countInputState={[customCategorizeCount, setCustomCategorizeCount]}
+          onCustomCountAction={handleCustomBatchCategorize}
+          customCountActionLabel={(count) => `Categorize First ${count || 'N'} Words`}
+          onAllEligibleAction={() => {
+            const allWithoutCategorization = filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length;
+            handleBatchCategorize(allWithoutCategorization);
+          }}
+          allEligibleActionLabel="All uncategorized"
+          getEligibleCount={() => filteredData.filter(e => !e.categorization || e.categorizationStatus !== 'completed').length}
+        />
+
+        {/* Batch Images Menu */}
+        <BatchActionMenu
+          triggerButtonLabel="Batch Images"
+          triggerButtonIcon={<ImageIcon className="h-4 w-4" />}
+          menuTitle="Generate images for first:"
+          countInputState={[customImageBatchCount, setCustomImageBatchCount]}
+          onCustomCountAction={handleCustomBatchGenerateImages}
+          customCountActionLabel={(count) => `Generate for ${count || 'N'} (Eligible)`}
+          onAllEligibleAction={handleBatchGenerateAllEligibleImages}
+          allEligibleActionLabel="All eligible"
+          getEligibleCount={() => filteredData.filter(entry => 
+            entry.prompt && 
+            entry.prompt.trim() !== '' && 
+            entry.imageStatus !== 'queued' && 
+            entry.imageStatus !== 'processing' && 
+            (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+          ).length}
+        />
       </div>
 
       {/* Table */}

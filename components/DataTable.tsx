@@ -118,8 +118,8 @@ export default function DataTable() {
     }
 
     const operationKey = `image-${entry.id}`;
-    updateEntry(entry.id, { imageStatus: 'queued' });
-    activityManager.addActivity('loading', `Queuing image for "${entry.original_text}"`, undefined, operationKey);
+    updateEntry(entry.id, { imageStatus: 'processing' });
+    activityManager.addActivity('loading', `Processing image for "${entry.original_text}"`, undefined, operationKey);
     
     const result = await queueImageService({
       action: 'add',
@@ -545,7 +545,11 @@ export default function DataTable() {
               <button
                 onClick={() => handleGenerateImage(entry)}
                 disabled={!entry.prompt || (entry.imageStatus === 'processing' || entry.imageStatus === 'queued')}
-                className="btn-primary"
+                className={`btn-primary ${
+                  (!entry.prompt || (entry.imageStatus === 'processing' || entry.imageStatus === 'queued')) 
+                  ? 'opacity-50 cursor-not-allowed' 
+                  : ''
+                }`}
               >
                 {entry.imageStatus === 'processing' || entry.imageStatus === 'queued' ? (
                   <div className="loading-spinner" />
@@ -561,7 +565,7 @@ export default function DataTable() {
         },
       },
     ],
-    [editingId, editingPrompt]
+    [editingId, editingPrompt, entries]
   );
 
   const table = useReactTable({
