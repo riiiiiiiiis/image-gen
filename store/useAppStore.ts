@@ -147,16 +147,24 @@ export const useAppStore = create<AppStore>()((set, get) => ({
               if (updatedEntry.promptStatus === 'generating') {
                 // Prompt generation was interrupted, reset status
                 updatedEntry.promptStatus = 'error'; 
-                console.log(`Resetting stuck promptStatus to 'error' for entry ID ${entry.id}`);
+                console.log(`Resetting stuck promptStatus 'generating' to 'error' for entry ID ${entry.id}`);
               }
               if (updatedEntry.imageStatus === 'processing') {
                 // Single image generation was interrupted, reset status
                 updatedEntry.imageStatus = 'error';
                 console.log(`Resetting stuck imageStatus 'processing' to 'error' for entry ID ${entry.id}`);
               }
-              // Note: 'queued' status (typically from batch operations) is left as is.
-              // The server-side queue is in-memory, so these might also be stale after a server restart.
-              // A more advanced system might involve checking job statuses against the server if the queue were persistent.
+              if (updatedEntry.imageStatus === 'queued') {
+                // If it's 'queued' and has an image, it's likely an error or incomplete update from a previous batch.
+                // If it's 'queued' and has NO image, it's a truly stale queue item that never started.
+                if (updatedEntry.imageUrl) {
+                    updatedEntry.imageStatus = 'error';
+                    console.log(`Resetting stuck imageStatus 'queued' (with image) to 'error' for entry ID ${entry.id}`);
+                } else {
+                    updatedEntry.imageStatus = 'none';
+                    console.log(`Resetting stuck imageStatus 'queued' (no image) to 'none' for entry ID ${entry.id}`);
+                }
+              }
               return updatedEntry;
             });
             set({ entries, isInitialized: true });

@@ -545,11 +545,7 @@ export default function DataTable() {
               <button
                 onClick={() => handleGenerateImage(entry)}
                 disabled={!entry.prompt || (entry.imageStatus === 'processing' || entry.imageStatus === 'queued')}
-                className={`btn-primary ${
-                  (!entry.prompt || (entry.imageStatus === 'processing' || entry.imageStatus === 'queued')) 
-                  ? 'opacity-50 cursor-not-allowed' 
-                  : ''
-                }`}
+                className="btn-primary"
               >
                 {entry.imageStatus === 'processing' || entry.imageStatus === 'queued' ? (
                   <div className="loading-spinner" />
@@ -565,7 +561,7 @@ export default function DataTable() {
         },
       },
     ],
-    [editingId, editingPrompt, entries]
+    [editingId, editingPrompt]
   );
 
   const table = useReactTable({

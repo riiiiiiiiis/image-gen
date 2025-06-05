@@ -144,678 +144,6 @@ This section contains the contents of the repository's files.
 }
 </file>
 
-<file path="components/BatchActionMenu.tsx">
-'use client';
-
-import React, { useState, useRef, useEffect } from 'react';
-
-export interface BatchActionMenuProps {
-  triggerButtonLabel: string;
-  triggerButtonIcon: React.ReactNode;
-  menuTitle: string;
-  countInputState: [string, (value: string) => void];
-  onCustomCountAction: (count: number) => void;
-  customCountActionLabel: (count: string) => string;
-  onAllEligibleAction?: () => void;
-  allEligibleActionLabel?: string;
-  getEligibleCount?: () => number;
-  className?: string;
-}
-
-export function BatchActionMenu({
-  triggerButtonLabel,
-  triggerButtonIcon,
-  menuTitle,
-  countInputState,
-  onCustomCountAction,
-  customCountActionLabel,
-  onAllEligibleAction,
-  allEligibleActionLabel,
-  getEligibleCount,
-  className = ''
-}: BatchActionMenuProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [customCount, setCustomCount] = countInputState;
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // Handle click outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isOpen]);
-
-  const handleCustomAction = () => {
-    const count = parseInt(customCount, 10);
-    if (count > 0) {
-      onCustomCountAction(count);
-      setIsOpen(false);
-    }
-  };
-
-  const handleAllEligibleAction = () => {
-    if (onAllEligibleAction) {
-      onAllEligibleAction();
-      setIsOpen(false);
-    }
-  };
-
-  return (
-    <div className={`relative ${className}`} ref={menuRef}>
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="btn-primary flex items-center gap-2"
-      >
-        {triggerButtonIcon}
-        {triggerButtonLabel}
-      </button>
-      
-      {isOpen && (
-        <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
-          <div className="p-2">
-            <div className="mb-2">
-              <div className="text-xs text-gray-400 mb-1">{menuTitle}</div>
-              <input
-                type="number"
-                value={customCount}
-                onChange={(e) => setCustomCount(e.target.value)}
-                placeholder="Number of items"
-                className="input-field w-full text-sm px-3 py-2"
-                min="1"
-                aria-label={menuTitle}
-              />
-              <button
-                onClick={handleCustomAction}
-                disabled={!customCount || parseInt(customCount, 10) <= 0}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-1"
-              >
-                {customCountActionLabel(customCount)}
-              </button>
-            </div>
-            
-            {onAllEligibleAction && allEligibleActionLabel && (
-              <>
-                <div className="border-t border-gray-700 my-2"></div>
-                <button
-                  onClick={handleAllEligibleAction}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
-                >
-                  {allEligibleActionLabel}
-                  {getEligibleCount && (
-                    <span> ({getEligibleCount()})</span>
-                  )}
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-</file>
-
-<file path="lib/aiUtils.ts">
-export interface AiErrorDetail {
-  message: string;
-  status: number;
-}
-
-export interface AiServiceErrorConfig {
-  serviceName: string;
-  apiKeyEnvVar: string;
-  apiKeyErrorSubstrings: string[];
-  rateLimitErrorSubstrings: string[];
-  modelNotFoundErrorSubstrings: string[];
-}
-
-// Predefined configurations for common AI services
-export const AI_SERVICE_CONFIGS = {
-  gemini: {
-    serviceName: 'Gemini',
-    apiKeyEnvVar: 'GEMINI_API_KEY',
-    apiKeyErrorSubstrings: ['API_KEY_INVALID', 'Invalid API key'],
-    rateLimitErrorSubstrings: ['RATE_LIMIT_EXCEEDED', 'quota'],
-    modelNotFoundErrorSubstrings: ['not found', '404']
-  },
-  openrouter: {
-    serviceName: 'OpenRouter',
-    apiKeyEnvVar: 'OPENROUTER_API_KEY',
-    apiKeyErrorSubstrings: ['Invalid API key', 'Unauthorized'],
-    rateLimitErrorSubstrings: ['Rate limit'],
-    modelNotFoundErrorSubstrings: ['Model not found']
-  }
-} as const;
-
-export function handleAiServiceError(
-  error: any,
-  config: AiServiceErrorConfig
-): AiErrorDetail {
-  console.error(`${config.serviceName} API Error:`, error);
-  
-  const errorMessage = error instanceof Error ? error.message : String(error);
-  
-  // Check for API key errors
-  if (config.apiKeyErrorSubstrings.some(substring => errorMessage.includes(substring))) {
-    return {
-      message: `Invalid API key. Please check your ${config.apiKeyEnvVar} in .env.local`,
-      status: 401
-    };
-  }
-  
-  // Check for rate limit errors
-  if (config.rateLimitErrorSubstrings.some(substring => errorMessage.includes(substring))) {
-    return {
-      message: `Rate limit exceeded for ${config.serviceName}. Please try again later.`,
-      status: 429
-    };
-  }
-  
-  // Check for model not found errors
-  if (config.modelNotFoundErrorSubstrings.some(substring => errorMessage.includes(substring))) {
-    return {
-      message: `${config.serviceName} model not available. Please check the model configuration.`,
-      status: 404
-    };
-  }
-  
-  // Default error
-  return {
-    message: errorMessage || `Failed to call ${config.serviceName} API.`,
-    status: 500
-  };
-}
-</file>
-
-<file path="lib/apiUtils.ts">
-import { NextRequest, NextResponse } from 'next/server';
-
-type ApiHandler<T = any, U = any> = (request: NextRequest, body?: T) => Promise<NextResponse<U>>;
-
-export interface ApiRequestOptions {
-  parseBody?: boolean;
-}
-
-export async function handleApiRequest<T = any, U = any>(
-  request: NextRequest,
-  handler: ApiHandler<T, U>,
-  options: ApiRequestOptions = { parseBody: true }
-): Promise<NextResponse<U | { error: string }>> {
-  try {
-    let body: T | undefined;
-    
-    if ((request.method === 'POST' || request.method === 'PATCH' || request.method === 'PUT') && options.parseBody) {
-      try {
-        body = await request.json();
-      } catch (e) {
-        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
-      }
-    }
-    
-    return await handler(request, body);
-  } catch (error: any) {
-    console.error(`API Error in ${request.url}:`, error);
-    
-    // If error is already a NextResponse, return it
-    if (error instanceof Response) {
-      return error as NextResponse;
-    }
-    
-    // Extract status and message from error if available
-    const status = error.status || 500;
-    const message = error.message || 'Internal Server Error';
-    
-    // If error object has an explicit error field, use it
-    if (error.error) {
-      return NextResponse.json({ error: error.error }, { status });
-    }
-    
-    return NextResponse.json({ error: message }, { status });
-  }
-}
-
-// Validation utilities
-export function validateRequestBody<T>(body: any, requiredFields: (keyof T)[]): { valid: boolean; error?: string; status?: number } {
-  if (!body) {
-    return { valid: false, error: 'Request body is missing.', status: 400 };
-  }
-  
-  for (const field of requiredFields) {
-    const value = body[field];
-    if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
-      return { valid: false, error: `Missing required field: ${String(field)}`, status: 400 };
-    }
-  }
-  
-  return { valid: true };
-}
-
-export function validateRequestArray<T>(array: any, itemName: string = 'entries'): { valid: boolean; error?: string; status?: number } {
-  if (!array || !Array.isArray(array)) {
-    return { valid: false, error: `Missing or invalid "${itemName}" array.`, status: 400 };
-  }
-  
-  if (array.length === 0) {
-    return { valid: false, error: `"${itemName}" array cannot be empty.`, status: 400 };
-  }
-  
-  return { valid: true };
-}
-</file>
-
-<file path="lib/imageUtils.ts">
-import fs from 'fs';
-import path from 'path';
-import sharp from 'sharp';
-import { IMAGES_DIR_PATH } from './paths';
-
-export interface ImageSaveOptions {
-  resize?: {
-    width: number;
-    height: number;
-    fit: 'cover' | 'contain' | 'fill' | 'inside' | 'outside';
-    position?: string;
-  };
-}
-
-export interface ImageSaveResult {
-  localImageUrl: string;
-  originalUrl: string;
-  localPath: string;
-  filename: string;
-}
-
-export async function saveImageFromUrl(
-  imageUrl: string,
-  entryId: number,
-  options?: ImageSaveOptions
-): Promise<ImageSaveResult> {
-  console.log('Downloading image from:', imageUrl);
-  
-  // Fetch the image
-  const response = await fetch(imageUrl);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch image: ${response.statusText}`);
-  }
-  
-  const imageBuffer = await response.arrayBuffer();
-  let buffer = Buffer.from(imageBuffer);
-  
-  // Apply resizing if requested
-  if (options?.resize) {
-    try {
-      const { width, height, fit, position = 'center' } = options.resize;
-      console.log(`Resizing image ${entryId} to ${width}x${height}...`);
-      
-      buffer = await sharp(buffer)
-        .resize(width, height, {
-          fit,
-          position: position as any
-        })
-        .png() // Ensure PNG output format
-        .toBuffer();
-      
-      console.log(`Image ${entryId} successfully resized to ${width}x${height}.`);
-    } catch (resizeError) {
-      console.error(`Error resizing image ${entryId}:`, resizeError);
-      throw new Error(
-        `Failed to resize image ${entryId}: ${
-          resizeError instanceof Error ? resizeError.message : String(resizeError)
-        }`
-      );
-    }
-  }
-  
-  // Create images directory if it doesn't exist
-  if (!fs.existsSync(IMAGES_DIR_PATH)) {
-    fs.mkdirSync(IMAGES_DIR_PATH, { recursive: true });
-  }
-  
-  // Use entry ID as filename - simple and unique
-  const filename = `${entryId}.png`;
-  const filepath = path.join(IMAGES_DIR_PATH, filename);
-  
-  // Save the file
-  fs.writeFileSync(filepath, buffer);
-  console.log('Image saved to:', filepath);
-  
-  // Return both the original URL and the local path with cache-busting timestamp
-  const timestamp = Date.now();
-  const localImageUrl = `/images/${filename}?t=${timestamp}`;
-  
-  return {
-    localImageUrl,
-    originalUrl: imageUrl,
-    localPath: filepath,
-    filename
-  };
-}
-</file>
-
-<file path="lib/paths.ts">
-import path from 'path';
-
-// Base directories
-export const CWD = process.cwd();
-export const DATA_DIR = path.join(CWD, 'data');
-export const PUBLIC_DIR = path.join(CWD, 'public');
-
-// Common file paths
-export const GALLERY_JSON_PATH = path.join(DATA_DIR, 'gallery.json');
-export const IMAGES_DIR_PATH = path.join(PUBLIC_DIR, 'images');
-export const PROMPT_OVERRIDES_YAML_PATH = path.join(CWD, 'prompt_overrides.yaml');
-export const DATABASE_FILE_PATH = path.join(DATA_DIR, 'language-cards.db');
-</file>
-
-<file path="app/api/gallery/route.ts">
-import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { handleApiRequest } from '@/lib/apiUtils';
-import { GALLERY_JSON_PATH, IMAGES_DIR_PATH } from '@/lib/paths';
-
-export async function GET(request: NextRequest) {
-  return handleApiRequest(request, async () => {
-    // Read gallery JSON
-    let galleryData;
-    if (fs.existsSync(GALLERY_JSON_PATH)) {
-      const fileContent = fs.readFileSync(GALLERY_JSON_PATH, 'utf8');
-      galleryData = JSON.parse(fileContent);
-    } else {
-      // Auto-generate from existing images
-      galleryData = await generateGalleryFromImages();
-    }
-
-    return NextResponse.json(galleryData);
-  }, { parseBody: false });
-}
-
-async function generateGalleryFromImages() {
-  const imageFiles = fs.readdirSync(IMAGES_DIR_PATH)
-    .filter(file => /\.(png|jpg|jpeg|webp)$/i.test(file))
-    .map(filename => {
-      const nameWithoutExt = path.parse(filename).name;
-      // Only include files with numeric IDs
-      if (isNaN(Number(nameWithoutExt))) {
-        return null;
-      }
-      return {
-        id: Number(nameWithoutExt),
-        filename,
-        path: `/images/${nameWithoutExt}.png`,
-        word: null,
-        translation: null,
-        prompt: null,
-        created_at: new Date().toISOString()
-      };
-    })
-    .filter(Boolean); // Remove null entries
-
-  const galleryData = {
-    images: imageFiles,
-    metadata: {
-      total_count: imageFiles.length,
-      last_updated: new Date().toISOString(),
-      version: "1.0"
-    }
-  };
-
-  // Save generated data
-  fs.writeFileSync(GALLERY_JSON_PATH, JSON.stringify(galleryData, null, 2));
-  return galleryData;
-}
-</file>
-
-<file path="app/api/generate-images-batch/route.ts">
-import { NextRequest, NextResponse } from 'next/server';
-import { imageQueue } from '@/lib/imageQueue';
-import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
-
-interface GenerateImageBatchRequestEntry {
-  entryId: number;
-  prompt: string;
-  englishWord: string;
-}
-
-export async function POST(request: NextRequest) {
-  return handleApiRequest(request, async (_req, body: { entries: GenerateImageBatchRequestEntry[] }) => {
-    // Input validation
-    const validation = validateRequestArray(body.entries, 'entries');
-    if (!validation.valid) {
-      return NextResponse.json({ error: validation.error }, { status: validation.status });
-    }
-
-    const { entries } = body;
-
-    // Initialize counters
-    let successfullyQueuedCount = 0;
-    let failedToQueueCount = 0;
-    const itemErrors: Array<{ entryId: number; error: string }> = [];
-
-    // Process each entry
-    for (const entry of entries) {
-      // Validate each item
-      if (!entry.entryId || !entry.prompt || !entry.prompt.trim() || !entry.englishWord) {
-        failedToQueueCount++;
-        itemErrors.push({
-          entryId: entry.entryId || -1,
-          error: 'Missing entryId, prompt, or englishWord.'
-        });
-        console.warn(`Skipping invalid entry in batch image generation: ${JSON.stringify(entry)}`);
-        continue;
-      }
-
-      try {
-        await imageQueue.addToQueue(entry.entryId, entry.englishWord, entry.prompt);
-        successfullyQueuedCount++;
-      } catch (queueError) {
-        console.error(`Error adding entry ${entry.entryId} to imageQueue:`, queueError);
-        failedToQueueCount++;
-        itemErrors.push({
-          entryId: entry.entryId,
-          error: queueError instanceof Error ? queueError.message : 'Failed to add to internal queue.'
-        });
-      }
-    }
-
-    // Prepare response
-    let responseMessage: string;
-    
-    if (failedToQueueCount > 0 && successfullyQueuedCount === 0) {
-      responseMessage = `Failed to queue all ${failedToQueueCount} images.`;
-      return NextResponse.json(
-        {
-          success: false,
-          message: responseMessage,
-          queuedCount: successfullyQueuedCount,
-          errorCount: failedToQueueCount,
-          errors: itemErrors
-        },
-        { status: 500 }
-      );
-    }
-
-    responseMessage = `Successfully queued ${successfullyQueuedCount} images for generation.`;
-    if (failedToQueueCount > 0) {
-      responseMessage += ` Failed to queue ${failedToQueueCount} images.`;
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: responseMessage,
-      queuedCount: successfullyQueuedCount,
-      errorCount: failedToQueueCount,
-      errors: itemErrors.length > 0 ? itemErrors : undefined
-    });
-
-  });
-}
-</file>
-
-<file path="app/api/language-cards/route.ts">
-import { NextRequest, NextResponse } from 'next/server';
-import { languageCardRepository } from '@/lib/db/repository';
-import { WordEntry } from '@/types';
-import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
-
-export async function GET(request: NextRequest) {
-  return handleApiRequest(request, async () => {
-    const entries = await languageCardRepository.findAll();
-    return NextResponse.json(entries);
-  }, { parseBody: false });
-}
-
-export async function POST(request: NextRequest) {
-  return handleApiRequest(request, async (_req, body: WordEntry[]) => {
-    if (!Array.isArray(body)) {
-      return NextResponse.json({ error: 'Request body must be an array of entries' }, { status: 400 });
-    }
-    
-    await languageCardRepository.bulkUpsert(body);
-    return NextResponse.json({ success: true });
-  });
-}
-
-export async function PATCH(request: NextRequest) {
-  return handleApiRequest(request, async (_req, body: { id: number; updates: Partial<WordEntry> }) => {
-    const validation = validateRequestBody(body, ['id', 'updates']);
-    if (!validation.valid) {
-      return NextResponse.json({ error: validation.error }, { status: validation.status });
-    }
-    
-    await languageCardRepository.update(body.id, body.updates);
-    return NextResponse.json({ success: true });
-  });
-}
-</file>
-
-<file path="app/api/test-categorization/route.ts">
-import { NextRequest, NextResponse } from 'next/server';
-import { getGeminiModel } from '@/lib/gemini';
-import { handleApiRequest } from '@/lib/apiUtils';
-
-export async function GET(request: NextRequest) {
-  return handleApiRequest(request, async () => {
-    const testWords = [
-      { id: 1, original_text: 'a, an', translation_text: 'неопределенный артикль', level_id: 66 },
-      { id: 2, original_text: 'about', translation_text: 'о, около, приблизительно, почти', level_id: 66 }
-    ];
-    
-    const model = getGeminiModel();
-    const results = [];
-    
-    for (const word of testWords) {
-      const prompt = `Categorize "${word.original_text}" (${word.translation_text}) for emoji image generation.
-
-Return JSON:
-{
-  "primary_category": "CONCRETE-VISUAL" or "ABSTRACT-SYMBOLIC" or "ACTION-VISUAL" or "STATE-METAPHORICAL",
-  "image_suitability": "HIGH" or "MEDIUM" or "LOW",
-  "word_type": "noun" or "verb" or "adjective" or "adverb" or "phrase",
-  "transformation_needed": true or false,
-  "transformation_suggestion": "",
-  "confidence": 0.9
-}`;
-
-      try {
-        console.log(`Testing categorization for "${word.original_text}"`);
-        
-        const response = await model.generateContent({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 200,
-            responseMimeType: 'application/json',
-          },
-          thinkingConfig: {
-            includeThoughts: false,
-          },
-        });
-        
-        const result = response.response;
-        const text = result.text().trim();
-        
-        console.log(`Response for "${word.original_text}":`, text);
-        console.log('Usage metadata:', result.usageMetadata);
-        
-        results.push({
-          word: word.original_text,
-          success: true,
-          response: text,
-          usage: result.usageMetadata
-        });
-      } catch (error) {
-        console.error(`Error for "${word.original_text}":`, error);
-        results.push({
-          word: word.original_text,
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    }
-    
-    return NextResponse.json({ results });
-  }, { parseBody: false });
-}
-</file>
-
-<file path="app/api/test-gemini/route.ts">
-import { NextRequest, NextResponse } from 'next/server';
-import { getGeminiModel } from '@/lib/gemini';
-import { handleApiRequest } from '@/lib/apiUtils';
-
-export async function GET(request: NextRequest) {
-  return handleApiRequest(request, async () => {
-    // Check if API key exists
-    if (!process.env.GEMINI_API_KEY) {
-      return NextResponse.json({ 
-        error: 'GEMINI_API_KEY is not set in environment variables',
-        status: 'error' 
-      }, { status: 500 });
-    }
-    
-    const model = getGeminiModel();
-    
-    // Simple test prompt
-    const testPrompt = 'Return a simple JSON object: {"test": "success", "number": 42}';
-    
-    console.log('Testing Gemini API...');
-    
-    const response = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: testPrompt }] }],
-      generationConfig: {
-        temperature: 0.1,
-        topK: 1,
-        topP: 0.95,
-        maxOutputTokens: 100,
-      },
-    });
-    
-    const result = response.response;
-    const text = result.text().trim();
-    
-    console.log('Gemini test response:', text);
-    
-    return NextResponse.json({
-      status: 'success',
-      model: 'gemini-2.5-flash-preview-05-20',
-      response: text,
-      apiKeySet: true,
-    });
-  }, { parseBody: false });
-}
-</file>
-
 <file path="app/theme.css">
 @theme {
   /* Colors */
@@ -1014,6 +342,127 @@ export default function ActivityLog({ maxItems = 5 }: ActivityLogProps) {
         >
           Clear all
         </button>
+      )}
+    </div>
+  );
+}
+</file>
+
+<file path="components/BatchActionMenu.tsx">
+'use client';
+
+import React, { useState, useRef, useEffect } from 'react';
+
+export interface BatchActionMenuProps {
+  triggerButtonLabel: string;
+  triggerButtonIcon: React.ReactNode;
+  menuTitle: string;
+  countInputState: [string, (value: string) => void];
+  onCustomCountAction: (count: number) => void;
+  customCountActionLabel: (count: string) => string;
+  onAllEligibleAction?: () => void;
+  allEligibleActionLabel?: string;
+  getEligibleCount?: () => number;
+  className?: string;
+}
+
+export function BatchActionMenu({
+  triggerButtonLabel,
+  triggerButtonIcon,
+  menuTitle,
+  countInputState,
+  onCustomCountAction,
+  customCountActionLabel,
+  onAllEligibleAction,
+  allEligibleActionLabel,
+  getEligibleCount,
+  className = ''
+}: BatchActionMenuProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [customCount, setCustomCount] = countInputState;
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Handle click outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  const handleCustomAction = () => {
+    const count = parseInt(customCount, 10);
+    if (count > 0) {
+      onCustomCountAction(count);
+      setIsOpen(false);
+    }
+  };
+
+  const handleAllEligibleAction = () => {
+    if (onAllEligibleAction) {
+      onAllEligibleAction();
+      setIsOpen(false);
+    }
+  };
+
+  return (
+    <div className={`relative ${className}`} ref={menuRef}>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="btn-primary flex items-center gap-2"
+      >
+        {triggerButtonIcon}
+        {triggerButtonLabel}
+      </button>
+      
+      {isOpen && (
+        <div className="absolute right-0 mt-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg z-10">
+          <div className="p-2">
+            <div className="mb-2">
+              <div className="text-xs text-gray-400 mb-1">{menuTitle}</div>
+              <input
+                type="number"
+                value={customCount}
+                onChange={(e) => setCustomCount(e.target.value)}
+                placeholder="Number of items"
+                className="input-field w-full text-sm px-3 py-2"
+                min="1"
+                aria-label={menuTitle}
+              />
+              <button
+                onClick={handleCustomAction}
+                disabled={!customCount || parseInt(customCount, 10) <= 0}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-1"
+              >
+                {customCountActionLabel(customCount)}
+              </button>
+            </div>
+            
+            {onAllEligibleAction && allEligibleActionLabel && (
+              <>
+                <div className="border-t border-gray-700 my-2"></div>
+                <button
+                  onClick={handleAllEligibleAction}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
+                >
+                  {allEligibleActionLabel}
+                  {getEligibleCount && (
+                    <span> ({getEligibleCount()})</span>
+                  )}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1480,180 +929,256 @@ export async function runMigrations() {
 }
 </file>
 
-<file path="lib/openrouter.server.ts">
-// Server-only OpenRouter integration
-// This file should never be imported client-side
-
-import { handleAiServiceError, AI_SERVICE_CONFIGS } from './aiUtils';
-
-export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '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';
-export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
-export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-preview-05-20';
-
-export interface OpenRouterMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+<file path="lib/aiUtils.ts">
+export interface AiErrorDetail {
+  message: string;
+  status: number;
 }
 
-interface OpenRouterRequest {
-  model: string;
-  messages: OpenRouterMessage[];
-  temperature?: number;
-  max_tokens?: number;
-  response_format?: { type: 'json_object' };
+export interface AiServiceErrorConfig {
+  serviceName: string;
+  apiKeyEnvVar: string;
+  apiKeyErrorSubstrings: string[];
+  rateLimitErrorSubstrings: string[];
+  modelNotFoundErrorSubstrings: string[];
 }
 
-export async function callOpenRouter(
-  messages: OpenRouterMessage[],
-  options: Partial<OpenRouterRequest> = {}
-): Promise<string> {
-  const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://github.com/sdxl-emoji-pipeline',
-      'X-Title': 'SDXL Emoji Pipeline'
-    },
-    body: JSON.stringify({
-      model: OPENROUTER_MODEL,
-      messages,
-      temperature: 0.1,
-      response_format: { type: 'json_object' },
-      ...options
-    })
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.error?.message || 
-      `OpenRouter API error: ${response.status} ${response.statusText}`
-    );
+// Predefined configurations for common AI services
+export const AI_SERVICE_CONFIGS = {
+  gemini: {
+    serviceName: 'Gemini',
+    apiKeyEnvVar: 'GEMINI_API_KEY',
+    apiKeyErrorSubstrings: ['API_KEY_INVALID', 'Invalid API key'],
+    rateLimitErrorSubstrings: ['RATE_LIMIT_EXCEEDED', 'quota'],
+    modelNotFoundErrorSubstrings: ['not found', '404']
+  },
+  openrouter: {
+    serviceName: 'OpenRouter',
+    apiKeyEnvVar: 'OPENROUTER_API_KEY',
+    apiKeyErrorSubstrings: ['Invalid API key', 'Unauthorized'],
+    rateLimitErrorSubstrings: ['Rate limit'],
+    modelNotFoundErrorSubstrings: ['Model not found']
   }
+} as const;
 
-  const data = await response.json();
-  return data.choices[0].message.content;
-}
-
-// Batch prompt generation constants and interfaces
-export const BATCH_PROMPT_GENERATION_INSTRUCTIONS = `
-For each word below, generate ONE emoji object following these rules:
-
-1. Object MUST visually represent the word's meaning
-2. Maximum 4 words
-3. Single object only
-4. Choose most memorable/iconic association
-5. If describing people, use light-skinned or yellow emoji-style characters
-6. FORBIDDEN: "vibrant", "representing", "showing", generic descriptions
-
-Think: What visual helps remember this word?
-
-Examples:
-"autumn" → "orange fall leaf" (NOT green leaf)
-"winter" → "snowflake" (NOT generic season)
-"happy" → "smiling face"
-"article" → "newspaper"
-"above" → "upward arrow"
-"actor" → "light-skinned man in suit"
-`;
-
-// This interface matches the structure of items in GeneratePromptsBatchPayload entries from lib/apiClient.ts
-export interface BatchPromptEntry {
-  id: number;
-  english: string;
-  russian: string;
-  transcription: string;
-}
-
-// Function to format batch prompt messages for OpenRouter
-export function formatOpenRouterBatchPromptMessages(entries: BatchPromptEntry[]): OpenRouterMessage[] {
-  const wordPairs = entries
-    .map(
-      (entry) =>
-        `ID: ${entry.id}\nEnglish: ${entry.english} ${entry.transcription}\nRussian: ${entry.russian}`
-    )
-    .join('\n\n');
-
-  const systemMessage = `You are an AI assistant. For each word pair, generate a concise visual prompt for an emoji-style image.
-Return your response as a JSON array where each object has an "id" field matching the input id and a "prompt" field with the single object description.
-Output only valid JSON, no markdown formatting. The "prompt" should adhere to the rules provided in the user message.
-Example format: [{"id": 1, "prompt": "orange fall leaf"}, {"id": 2, "prompt": "snowflake"}]`;
-
-  const userMessageContent = `${BATCH_PROMPT_GENERATION_INSTRUCTIONS}
-
-Word pairs:
-${wordPairs}
-
-Return valid JSON only, no markdown formatting.`;
-
-  return [
-    { role: 'system', content: systemMessage },
-    { role: 'user', content: userMessageContent },
-  ];
-}
-
-export function handleOpenRouterError(error: unknown) {
-  return handleAiServiceError(error, AI_SERVICE_CONFIGS.openrouter);
+export function handleAiServiceError(
+  error: any,
+  config: AiServiceErrorConfig
+): AiErrorDetail {
+  console.error(`${config.serviceName} API Error:`, error);
+  
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  
+  // Check for API key errors
+  if (config.apiKeyErrorSubstrings.some(substring => errorMessage.includes(substring))) {
+    return {
+      message: `Invalid API key. Please check your ${config.apiKeyEnvVar} in .env.local`,
+      status: 401
+    };
+  }
+  
+  // Check for rate limit errors
+  if (config.rateLimitErrorSubstrings.some(substring => errorMessage.includes(substring))) {
+    return {
+      message: `Rate limit exceeded for ${config.serviceName}. Please try again later.`,
+      status: 429
+    };
+  }
+  
+  // Check for model not found errors
+  if (config.modelNotFoundErrorSubstrings.some(substring => errorMessage.includes(substring))) {
+    return {
+      message: `${config.serviceName} model not available. Please check the model configuration.`,
+      status: 404
+    };
+  }
+  
+  // Default error
+  return {
+    message: errorMessage || `Failed to call ${config.serviceName} API.`,
+    status: 500
+  };
 }
 </file>
 
-<file path="lib/promptOverrides.ts">
-import * as yaml from 'js-yaml';
-import * as fs from 'fs';
-import { PROMPT_OVERRIDES_YAML_PATH } from './paths';
+<file path="lib/apiUtils.ts">
+import { NextRequest, NextResponse } from 'next/server';
 
-interface PromptOverrides {
-  [key: string]: string;
+type ApiHandler<T = any, U = any> = (request: NextRequest, body?: T) => Promise<NextResponse<U>>;
+
+export interface ApiRequestOptions {
+  parseBody?: boolean;
 }
 
-let cachedOverrides: PromptOverrides | null = null;
-let lastModified: number = 0;
-
-
-function loadOverrides(): PromptOverrides {
+export async function handleApiRequest<T = any, U = any>(
+  request: NextRequest,
+  handler: ApiHandler<T, U>,
+  options: ApiRequestOptions = { parseBody: true }
+): Promise<NextResponse<U | { error: string }>> {
   try {
-    // Check if file exists
-    if (!fs.existsSync(PROMPT_OVERRIDES_YAML_PATH)) {
-      console.log('No prompt_overrides.yaml file found, using default behavior');
-      return {};
+    let body: T | undefined;
+    
+    if ((request.method === 'POST' || request.method === 'PATCH' || request.method === 'PUT') && options.parseBody) {
+      try {
+        body = await request.json();
+      } catch (e) {
+        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+      }
     }
-
-    // Check if we need to reload (file modified)
-    const stats = fs.statSync(PROMPT_OVERRIDES_YAML_PATH);
-    const currentModified = stats.mtime.getTime();
-
-    if (cachedOverrides && currentModified === lastModified) {
-      return cachedOverrides;
+    
+    return await handler(request, body);
+  } catch (error: any) {
+    console.error(`API Error in ${request.url}:`, error);
+    
+    // If error is already a NextResponse, return it
+    if (error instanceof Response) {
+      return error as NextResponse;
     }
-
-    // Load and parse YAML file
-    const fileContents = fs.readFileSync(PROMPT_OVERRIDES_YAML_PATH, 'utf8');
-    const overrides = yaml.load(fileContents) as PromptOverrides;
-
-    // Update cache
-    cachedOverrides = overrides || {};
-    lastModified = currentModified;
-
-    console.log(`Loaded ${Object.keys(cachedOverrides).length} prompt overrides from YAML`);
-    return cachedOverrides;
-
-  } catch (error) {
-    console.error('Error loading prompt overrides:', error);
-    return {};
+    
+    // Extract status and message from error if available
+    const status = error.status || 500;
+    const message = error.message || 'Internal Server Error';
+    
+    // If error object has an explicit error field, use it
+    if (error.error) {
+      return NextResponse.json({ error: error.error }, { status });
+    }
+    
+    return NextResponse.json({ error: message }, { status });
   }
 }
 
-export function getPromptOverride(word: string): string | null {
-  const overrides = loadOverrides();
-  const normalizedWord = word.toLowerCase().trim();
+// Validation utilities
+export function validateRequestBody<T>(body: any, requiredFields: (keyof T)[]): { valid: boolean; error?: string; status?: number } {
+  if (!body) {
+    return { valid: false, error: 'Request body is missing.', status: 400 };
+  }
   
-  return overrides[normalizedWord] || null;
+  for (const field of requiredFields) {
+    const value = body[field];
+    if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
+      return { valid: false, error: `Missing required field: ${String(field)}`, status: 400 };
+    }
+  }
+  
+  return { valid: true };
 }
 
-export function hasPromptOverride(word: string): boolean {
-  return getPromptOverride(word) !== null;
+export function validateRequestArray<T>(array: any, itemName: string = 'entries'): { valid: boolean; error?: string; status?: number } {
+  if (!array || !Array.isArray(array)) {
+    return { valid: false, error: `Missing or invalid "${itemName}" array.`, status: 400 };
+  }
+  
+  if (array.length === 0) {
+    return { valid: false, error: `"${itemName}" array cannot be empty.`, status: 400 };
+  }
+  
+  return { valid: true };
 }
+</file>
+
+<file path="lib/imageUtils.ts">
+import fs from 'fs';
+import path from 'path';
+import sharp from 'sharp';
+import { IMAGES_DIR_PATH } from './paths';
+
+export interface ImageSaveOptions {
+  resize?: {
+    width: number;
+    height: number;
+    fit: 'cover' | 'contain' | 'fill' | 'inside' | 'outside';
+    position?: string;
+  };
+}
+
+export interface ImageSaveResult {
+  localImageUrl: string;
+  originalUrl: string;
+  localPath: string;
+  filename: string;
+}
+
+export async function saveImageFromUrl(
+  imageUrl: string,
+  entryId: number,
+  options?: ImageSaveOptions
+): Promise<ImageSaveResult> {
+  console.log('Downloading image from:', imageUrl);
+  
+  // Fetch the image
+  const response = await fetch(imageUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image: ${response.statusText}`);
+  }
+  
+  const imageBuffer = await response.arrayBuffer();
+  let buffer = Buffer.from(imageBuffer);
+  
+  // Apply resizing if requested
+  if (options?.resize) {
+    try {
+      const { width, height, fit, position = 'center' } = options.resize;
+      console.log(`Resizing image ${entryId} to ${width}x${height}...`);
+      
+      buffer = await sharp(buffer)
+        .resize(width, height, {
+          fit,
+          position: position as any
+        })
+        .png() // Ensure PNG output format
+        .toBuffer();
+      
+      console.log(`Image ${entryId} successfully resized to ${width}x${height}.`);
+    } catch (resizeError) {
+      console.error(`Error resizing image ${entryId}:`, resizeError);
+      throw new Error(
+        `Failed to resize image ${entryId}: ${
+          resizeError instanceof Error ? resizeError.message : String(resizeError)
+        }`
+      );
+    }
+  }
+  
+  // Create images directory if it doesn't exist
+  if (!fs.existsSync(IMAGES_DIR_PATH)) {
+    fs.mkdirSync(IMAGES_DIR_PATH, { recursive: true });
+  }
+  
+  // Use entry ID as filename - simple and unique
+  const filename = `${entryId}.png`;
+  const filepath = path.join(IMAGES_DIR_PATH, filename);
+  
+  // Save the file
+  fs.writeFileSync(filepath, buffer);
+  console.log('Image saved to:', filepath);
+  
+  // Return both the original URL and the local path with cache-busting timestamp
+  const timestamp = Date.now();
+  const localImageUrl = `/images/${filename}?t=${timestamp}`;
+  
+  return {
+    localImageUrl,
+    originalUrl: imageUrl,
+    localPath: filepath,
+    filename
+  };
+}
+</file>
+
+<file path="lib/paths.ts">
+import path from 'path';
+
+// Base directories
+export const CWD = process.cwd();
+export const DATA_DIR = path.join(CWD, 'data');
+export const PUBLIC_DIR = path.join(CWD, 'public');
+
+// Common file paths
+export const GALLERY_JSON_PATH = path.join(DATA_DIR, 'gallery.json');
+export const IMAGES_DIR_PATH = path.join(PUBLIC_DIR, 'images');
+export const PROMPT_OVERRIDES_YAML_PATH = path.join(CWD, 'prompt_overrides.yaml');
+export const DATABASE_FILE_PATH = path.join(DATA_DIR, 'language-cards.db');
 </file>
 
 <file path="public/file.svg">
@@ -1901,233 +1426,302 @@ away: "person walking away"
 }
 </file>
 
-<file path="app/api/generate-image/route.ts">
-import Replicate from 'replicate';
+<file path="app/api/gallery/route.ts">
 import { NextRequest, NextResponse } from 'next/server';
-import { getReplicateModel, createReplicateInput } from '@/lib/replicateConfig';
-import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
-import { saveImageFromUrl } from '@/lib/imageUtils';
+import fs from 'fs';
+import path from 'path';
+import { handleApiRequest } from '@/lib/apiUtils';
+import { GALLERY_JSON_PATH, IMAGES_DIR_PATH } from '@/lib/paths';
 
-const replicate = new Replicate({
-  auth: process.env.REPLICATE_API_TOKEN!,
-});
+export async function GET(request: NextRequest) {
+  return handleApiRequest(request, async () => {
+    // Read gallery JSON
+    let galleryData;
+    if (fs.existsSync(GALLERY_JSON_PATH)) {
+      const fileContent = fs.readFileSync(GALLERY_JSON_PATH, 'utf8');
+      galleryData = JSON.parse(fileContent);
+    } else {
+      // Auto-generate from existing images
+      galleryData = await generateGalleryFromImages();
+    }
+
+    return NextResponse.json(galleryData);
+  }, { parseBody: false });
+}
+
+async function generateGalleryFromImages() {
+  const imageFiles = fs.readdirSync(IMAGES_DIR_PATH)
+    .filter(file => /\.(png|jpg|jpeg|webp)$/i.test(file))
+    .map(filename => {
+      const nameWithoutExt = path.parse(filename).name;
+      // Only include files with numeric IDs
+      if (isNaN(Number(nameWithoutExt))) {
+        return null;
+      }
+      return {
+        id: Number(nameWithoutExt),
+        filename,
+        path: `/images/${nameWithoutExt}.png`,
+        word: null,
+        translation: null,
+        prompt: null,
+        created_at: new Date().toISOString()
+      };
+    })
+    .filter(Boolean); // Remove null entries
+
+  const galleryData = {
+    images: imageFiles,
+    metadata: {
+      total_count: imageFiles.length,
+      last_updated: new Date().toISOString(),
+      version: "1.0"
+    }
+  };
+
+  // Save generated data
+  fs.writeFileSync(GALLERY_JSON_PATH, JSON.stringify(galleryData, null, 2));
+  return galleryData;
+}
+</file>
+
+<file path="app/api/generate-images-batch/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { imageQueue } from '@/lib/imageQueue';
+import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
+
+interface GenerateImageBatchRequestEntry {
+  entryId: number;
+  prompt: string;
+  englishWord: string;
+}
 
 export async function POST(request: NextRequest) {
-  return handleApiRequest(request, async (_req, body: { prompt: string; entryId: number; englishWord: string }) => {
-    const validation = validateRequestBody(body, ['prompt', 'entryId', 'englishWord']);
+  return handleApiRequest(request, async (_req, body: { entries: GenerateImageBatchRequestEntry[] }) => {
+    // Input validation
+    const validation = validateRequestArray(body.entries, 'entries');
     if (!validation.valid) {
       return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
 
-    const { prompt, entryId } = body;
+    const { entries } = body;
 
-    let output;
-    try {
-      output = await replicate.run(
-        getReplicateModel(),
-        {
-          input: createReplicateInput(prompt),
-        }
-      );
-    } catch (error: any) {
-      console.error('Replicate API error:', error);
-      
-      // Handle specific Replicate API errors
-      if (error.message?.includes('Invalid token') || error.message?.includes('Unauthorized')) {
-        return NextResponse.json(
-          { error: 'Invalid API token. Please check your REPLICATE_API_TOKEN in .env.local' },
-          { status: 401 }
-        );
+    // Initialize counters
+    let successfullyQueuedCount = 0;
+    let failedToQueueCount = 0;
+    const itemErrors: Array<{ entryId: number; error: string }> = [];
+
+    // Process each entry
+    for (const entry of entries) {
+      // Validate each item
+      if (!entry.entryId || !entry.prompt || !entry.prompt.trim() || !entry.englishWord) {
+        failedToQueueCount++;
+        itemErrors.push({
+          entryId: entry.entryId || -1,
+          error: 'Missing entryId, prompt, or englishWord.'
+        });
+        console.warn(`Skipping invalid entry in batch image generation: ${JSON.stringify(entry)}`);
+        continue;
       }
-      
-      if (error.message?.includes('rate limit')) {
-        return NextResponse.json(
-          { error: 'Rate limit exceeded. Please try again later.' },
-          { status: 429 }
-        );
+
+      try {
+        await imageQueue.addToQueue(entry.entryId, entry.englishWord, entry.prompt);
+        successfullyQueuedCount++;
+      } catch (queueError) {
+        console.error(`Error adding entry ${entry.entryId} to imageQueue:`, queueError);
+        failedToQueueCount++;
+        itemErrors.push({
+          entryId: entry.entryId,
+          error: queueError instanceof Error ? queueError.message : 'Failed to add to internal queue.'
+        });
       }
-      
-      throw error; // Re-throw to let handleApiRequest handle it
     }
 
-    console.log('Raw output from replicate.run:', output);
-    console.log('Output type:', typeof output);
-    console.log('Is array?', Array.isArray(output));
-
-    // The output from replicate.run() is typically an array of FileOutput objects
-    // For SDXL-emoji with num_outputs: 1, it should be an array with one FileOutput
-    let imageUrl: string;
+    // Prepare response
+    let responseMessage: string;
     
-    if (Array.isArray(output) && output.length > 0) {
-      // Get the first FileOutput object and call .url() to get the URL
-      const fileOutput = output[0] as any;
-      const urlResult = fileOutput.url ? fileOutput.url() : fileOutput.toString();
-      imageUrl = urlResult.toString(); // Convert URL object to string
-      console.log('Extracted imageUrl from FileOutput:', imageUrl);
-    } else if (output && typeof output === 'object' && 'url' in output) {
-      // Handle case where it might be a single FileOutput object
-      const urlResult = (output as any).url();
-      imageUrl = urlResult.toString(); // Convert URL object to string
-      console.log('Extracted imageUrl from single FileOutput:', imageUrl);
-    } else if (typeof output === 'string') {
-      // Handle case where it might already be a URL string
-      imageUrl = output;
-      console.log('Output was already a string URL:', imageUrl);
-    } else {
-      console.error('Unexpected output format:', output);
-      throw new Error('Unexpected output format from Replicate');
-    }
-    
-    // Validate that we got a valid URL
-    if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.startsWith('http')) {
-      console.error('Invalid imageUrl received:', imageUrl);
+    if (failedToQueueCount > 0 && successfullyQueuedCount === 0) {
+      responseMessage = `Failed to queue all ${failedToQueueCount} images.`;
       return NextResponse.json(
-        { error: 'Failed to get a valid image URL' },
+        {
+          success: false,
+          message: responseMessage,
+          queuedCount: successfullyQueuedCount,
+          errorCount: failedToQueueCount,
+          errors: itemErrors
+        },
         { status: 500 }
       );
     }
 
-    // Download and save the image locally
-    try {
-      const result = await saveImageFromUrl(imageUrl, entryId);
-      const generatedAt = new Date().toISOString();
-      
-      return NextResponse.json({ 
-        imageUrl: result.localImageUrl, // Return local path with cache-buster for the app to use
-        originalUrl: result.originalUrl, // Keep original URL as backup
-        localPath: result.localPath,
-        filename: result.filename,
-        status: 'completed',
-        generatedAt: generatedAt, // Add timestamp for sorting
-      });
-    } catch (downloadError) {
-      console.error('Error downloading/saving image:', downloadError);
-      // If download fails, still return the original URL
-      return NextResponse.json({ 
-        imageUrl,
-        status: 'completed',
-        downloadError: 'Failed to save image locally, using remote URL',
-      });
+    responseMessage = `Successfully queued ${successfullyQueuedCount} images for generation.`;
+    if (failedToQueueCount > 0) {
+      responseMessage += ` Failed to queue ${failedToQueueCount} images.`;
     }
+
+    return NextResponse.json({
+      success: true,
+      message: responseMessage,
+      queuedCount: successfullyQueuedCount,
+      errorCount: failedToQueueCount,
+      errors: itemErrors.length > 0 ? itemErrors : undefined
+    });
+
   });
 }
 </file>
 
-<file path="app/api/queue-image/route.ts">
+<file path="app/api/language-cards/route.ts">
 import { NextRequest, NextResponse } from 'next/server';
-import { imageQueue } from '@/lib/imageQueue';
+import { languageCardRepository } from '@/lib/db/repository';
+import { WordEntry } from '@/types';
 import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
 
-// In-memory storage for completion callbacks
-const completionCallbacks = new Map<string, (result: any) => void>();
-const errorCallbacks = new Map<string, (error: string) => void>();
-
-// Set up notification handlers on the queue instance
-(imageQueue as any).notifyCompletion = function(item: any, result: any) {
-  const callback = completionCallbacks.get(item.id);
-  if (callback) {
-    callback(result);
-    completionCallbacks.delete(item.id);
-  }
-};
-
-(imageQueue as any).notifyError = function(item: any, error: string) {
-  const errorCallback = errorCallbacks.get(item.id);
-  if (errorCallback) {
-    errorCallback(error);
-    errorCallbacks.delete(item.id);
-  }
-};
+export async function GET(request: NextRequest) {
+  return handleApiRequest(request, async () => {
+    const entries = await languageCardRepository.findAll();
+    return NextResponse.json(entries);
+  }, { parseBody: false });
+}
 
 export async function POST(request: NextRequest) {
-  return handleApiRequest(request, async (_req, body: { action: string; [key: string]: any }) => {
-    const validation = validateRequestBody(body, ['action']);
-    if (!validation.valid) {
-      return NextResponse.json({ error: validation.error }, { status: validation.status });
+  return handleApiRequest(request, async (_req, body: WordEntry[]) => {
+    if (!Array.isArray(body)) {
+      return NextResponse.json({ error: 'Request body must be an array of entries' }, { status: 400 });
     }
-
-    const { action, ...data } = body;
-
-    switch (action) {
-      case 'add':
-        return handleAddToQueue(data);
-      case 'status':
-        return handleGetStatus();
-      case 'items':
-        return handleGetItems();
-      default:
-        return NextResponse.json(
-          { error: 'Invalid action' },
-          { status: 400 }
-        );
-    }
+    
+    await languageCardRepository.bulkUpsert(body);
+    return NextResponse.json({ success: true });
   });
 }
 
-async function handleAddToQueue(data: any) {
-  const { entryId, englishWord, prompt } = data;
+export async function PATCH(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { id: number; updates: Partial<WordEntry> }) => {
+    const validation = validateRequestBody(body, ['id', 'updates']);
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
+    }
+    
+    await languageCardRepository.update(body.id, body.updates);
+    return NextResponse.json({ success: true });
+  });
+}
+</file>
 
-  console.log(`API: Adding to queue - entryId: ${entryId}, word: ${englishWord}`);
+<file path="app/api/test-categorization/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { getGeminiModel } from '@/lib/gemini';
+import { handleApiRequest } from '@/lib/apiUtils';
 
-  if (!entryId || !englishWord || !prompt) {
-    console.log('API: Missing required fields:', { entryId, englishWord, prompt: !!prompt });
-    return NextResponse.json(
-      { error: 'Missing required fields: entryId, englishWord, prompt' },
-      { status: 400 }
-    );
-  }
+export async function GET(request: NextRequest) {
+  return handleApiRequest(request, async () => {
+    const testWords = [
+      { id: 1, original_text: 'a, an', translation_text: 'неопределенный артикль', level_id: 66 },
+      { id: 2, original_text: 'about', translation_text: 'о, около, приблизительно, почти', level_id: 66 }
+    ];
+    
+    const model = getGeminiModel();
+    const results = [];
+    
+    for (const word of testWords) {
+      const prompt = `Categorize "${word.original_text}" (${word.translation_text}) for emoji image generation.
 
-  try {
-    // Add to queue
-    console.log(`API: Adding to imageQueue...`);
-    const queueId = await imageQueue.addToQueue(entryId, englishWord, prompt);
-    console.log(`API: Added to queue with ID: ${queueId}`);
+Return JSON:
+{
+  "primary_category": "CONCRETE-VISUAL" or "ABSTRACT-SYMBOLIC" or "ACTION-VISUAL" or "STATE-METAPHORICAL",
+  "image_suitability": "HIGH" or "MEDIUM" or "LOW",
+  "word_type": "noun" or "verb" or "adjective" or "adverb" or "phrase",
+  "transformation_needed": true or false,
+  "transformation_suggestion": "",
+  "confidence": 0.9
+}`;
 
-    // Create a promise that resolves when the image is generated
-    const resultPromise = new Promise<any>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        completionCallbacks.delete(queueId);
-        errorCallbacks.delete(queueId);
-        reject(new Error('Generation timeout'));
-      }, 300000); // 5 minute timeout
+      try {
+        console.log(`Testing categorization for "${word.original_text}"`);
+        
+        const response = await model.generateContent({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 200,
+            responseMimeType: 'application/json',
+          },
+          thinkingConfig: {
+            includeThoughts: false,
+          },
+        });
+        
+        const result = response.response;
+        const text = result.text().trim();
+        
+        console.log(`Response for "${word.original_text}":`, text);
+        console.log('Usage metadata:', result.usageMetadata);
+        
+        results.push({
+          word: word.original_text,
+          success: true,
+          response: text,
+          usage: result.usageMetadata
+        });
+      } catch (error) {
+        console.error(`Error for "${word.original_text}":`, error);
+        results.push({
+          word: word.original_text,
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+    
+    return NextResponse.json({ results });
+  }, { parseBody: false });
+}
+</file>
 
-      completionCallbacks.set(queueId, (result) => {
-        clearTimeout(timeout);
-        resolve(result);
-      });
+<file path="app/api/test-gemini/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { getGeminiModel } from '@/lib/gemini';
+import { handleApiRequest } from '@/lib/apiUtils';
 
-      errorCallbacks.set(queueId, (error) => {
-        clearTimeout(timeout);
-        reject(new Error(error));
-      });
+export async function GET(request: NextRequest) {
+  return handleApiRequest(request, async () => {
+    // Check if API key exists
+    if (!process.env.GEMINI_API_KEY) {
+      return NextResponse.json({ 
+        error: 'GEMINI_API_KEY is not set in environment variables',
+        status: 'error' 
+      }, { status: 500 });
+    }
+    
+    const model = getGeminiModel();
+    
+    // Simple test prompt
+    const testPrompt = 'Return a simple JSON object: {"test": "success", "number": 42}';
+    
+    console.log('Testing Gemini API...');
+    
+    const response = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: testPrompt }] }],
+      generationConfig: {
+        temperature: 0.1,
+        topK: 1,
+        topP: 0.95,
+        maxOutputTokens: 100,
+      },
     });
-
-    // Wait for completion
-    const result = await resultPromise;
-
+    
+    const result = response.response;
+    const text = result.text().trim();
+    
+    console.log('Gemini test response:', text);
+    
     return NextResponse.json({
-      queueId,
-      status: 'completed',
-      ...result,
+      status: 'success',
+      model: 'gemini-2.5-flash-preview-05-20',
+      response: text,
+      apiKeySet: true,
     });
-
-  } catch (error: any) {
-    console.error('Error adding to queue:', error);
-    return NextResponse.json(
-      { error: error.message || 'Failed to generate image' },
-      { status: 500 }
-    );
-  }
-}
-
-async function handleGetStatus() {
-  const status = imageQueue.getQueueStatus();
-  return NextResponse.json(status);
-}
-
-async function handleGetItems() {
-  const items = imageQueue.getQueueItems();
-  return NextResponse.json({ items });
+  }, { parseBody: false });
 }
 </file>
 
@@ -2549,47 +2143,6 @@ export default function FileUpload() {
 }
 </file>
 
-<file path="lib/db/database.ts">
-import Database from 'better-sqlite3';
-import { Kysely, SqliteDialect } from 'kysely';
-import { Database as DatabaseType, DB } from './schema';
-import { createTables } from './migrations';
-import { runMigrations } from './runMigrations';
-import { DATABASE_FILE_PATH } from '../paths';
-
-let db: DB | null = null;
-
-export function getDatabase(): DB {
-  if (!db) {
-    const dbPath = process.env.DATABASE_PATH || DATABASE_FILE_PATH;
-    
-    const sqlite = new Database(dbPath);
-    sqlite.pragma('journal_mode = WAL');
-    
-    db = new Kysely<DatabaseType>({
-      dialect: new SqliteDialect({
-        database: sqlite,
-      }),
-    });
-    
-    // Initialize tables if they don't exist
-    createTables(db);
-    
-    // Run migrations
-    runMigrations();
-  }
-  
-  return db;
-}
-
-export function closeDatabase(): void {
-  if (db) {
-    db.destroy();
-    db = null;
-  }
-}
-</file>
-
 <file path="lib/db/schema.ts">
 import { Kysely } from 'kysely';
 
@@ -2842,17 +2395,66 @@ export async function batchGenerateImagesService(
 }
 </file>
 
-<file path="lib/gemini.ts">
-import { GoogleGenerativeAI } from '@google/generative-ai';
+<file path="lib/openrouter.server.ts">
+// Server-only OpenRouter integration
+// This file should never be imported client-side
+
 import { handleAiServiceError, AI_SERVICE_CONFIGS } from './aiUtils';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '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';
+export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+export const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-preview-05-20';
 
-export const GEMINI_MODEL = 'gemini-2.5-flash-preview-05-20';
+export interface OpenRouterMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
 
-export const CORE_PROMPT_INSTRUCTIONS = `Generate ONE emoji object for: {english_word}
+interface OpenRouterRequest {
+  model: string;
+  messages: OpenRouterMessage[];
+  temperature?: number;
+  max_tokens?: number;
+  response_format?: { type: 'json_object' };
+}
 
-Rules:
+export async function callOpenRouter(
+  messages: OpenRouterMessage[],
+  options: Partial<OpenRouterRequest> = {}
+): Promise<string> {
+  const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://github.com/sdxl-emoji-pipeline',
+      'X-Title': 'SDXL Emoji Pipeline'
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      messages,
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      ...options
+    })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      errorData.error?.message || 
+      `OpenRouter API error: ${response.status} ${response.statusText}`
+    );
+  }
+
+  const data = await response.json();
+  return data.choices[0].message.content;
+}
+
+// Batch prompt generation constants and interfaces
+export const BATCH_PROMPT_GENERATION_INSTRUCTIONS = `
+For each word below, generate ONE emoji object following these rules:
+
 1. Object MUST visually represent the word's meaning
 2. Maximum 4 words
 3. Single object only
@@ -2869,66 +2471,45 @@ Examples:
 "article" → "newspaper"
 "above" → "upward arrow"
 "actor" → "light-skinned man in suit"
+`;
 
-Word: {english_word}
-Single object:`;
+// This interface matches the structure of items in GeneratePromptsBatchPayload entries from lib/apiClient.ts
+export interface BatchPromptEntry {
+  id: number;
+  english: string;
+  russian: string;
+  transcription: string;
+}
 
-export const PROMPT_TEMPLATE = `${CORE_PROMPT_INSTRUCTIONS}
+// Function to format batch prompt messages for OpenRouter
+export function formatOpenRouterBatchPromptMessages(entries: BatchPromptEntry[]): OpenRouterMessage[] {
+  const wordPairs = entries
+    .map(
+      (entry) =>
+        `ID: ${entry.id}\nEnglish: ${entry.english} ${entry.transcription}\nRussian: ${entry.russian}`
+    )
+    .join('\n\n');
 
-English: {english} {transcription}
-Russian: {russian}`;
-
-export const BATCH_PROMPT_TEMPLATE = `For each word below, generate ONE emoji object following these rules:
-
-1. Object MUST visually represent the word's meaning
-2. Maximum 4 words
-3. Single object only
-4. Choose most memorable/iconic association
-5. If describing people, use light-skinned or yellow emoji-style characters
-6. FORBIDDEN: "vibrant", "representing", "showing", generic descriptions
-
-Think: What visual helps remember this word?
-
-Examples:
-"autumn" → "orange fall leaf" (NOT green leaf)
-"winter" → "snowflake" (NOT generic season)
-"happy" → "smiling face"
-"article" → "newspaper"
-"above" → "upward arrow"
-"actor" → "light-skinned man in suit"
-
+  const systemMessage = `You are an AI assistant. For each word pair, generate a concise visual prompt for an emoji-style image.
 Return your response as a JSON array where each object has an "id" field matching the input id and a "prompt" field with the single object description.
+Output only valid JSON, no markdown formatting. The "prompt" should adhere to the rules provided in the user message.
+Example format: [{"id": 1, "prompt": "orange fall leaf"}, {"id": 2, "prompt": "snowflake"}]`;
+
+  const userMessageContent = `${BATCH_PROMPT_GENERATION_INSTRUCTIONS}
 
 Word pairs:
-{wordPairs}
+${wordPairs}
 
 Return valid JSON only, no markdown formatting.`;
 
-export function getGeminiModel() {
-  return genAI.getGenerativeModel({ 
-    model: GEMINI_MODEL,
-    systemInstruction: 'Output only valid JSON. No explanations.'
-  });
+  return [
+    { role: 'system', content: systemMessage },
+    { role: 'user', content: userMessageContent },
+  ];
 }
 
-export function formatSinglePrompt(english: string, russian: string, transcription: string): string {
-  return PROMPT_TEMPLATE
-    .replace('{english_word}', english)
-    .replace('{english}', english)
-    .replace('{transcription}', transcription)
-    .replace('{russian}', russian);
-}
-
-export function formatBatchPrompt(entries: Array<{ id: number; english: string; russian: string; transcription: string }>): string {
-  const wordPairs = entries.map(entry => 
-    `ID: ${entry.id}\nEnglish: ${entry.english} ${entry.transcription}\nRussian: ${entry.russian}`
-  ).join('\n\n');
-  
-  return BATCH_PROMPT_TEMPLATE.replace('{wordPairs}', wordPairs);
-}
-
-export function handleGeminiError(error: any) {
-  return handleAiServiceError(error, AI_SERVICE_CONFIGS.gemini);
+export function handleOpenRouterError(error: unknown) {
+  return handleAiServiceError(error, AI_SERVICE_CONFIGS.openrouter);
 }
 </file>
 
@@ -2959,6 +2540,64 @@ export {
   OPENROUTER_MODEL,
   BATCH_PROMPT_GENERATION_INSTRUCTIONS
 } from './openrouter.server';
+</file>
+
+<file path="lib/promptOverrides.ts">
+import * as yaml from 'js-yaml';
+import * as fs from 'fs';
+import { PROMPT_OVERRIDES_YAML_PATH } from './paths';
+
+interface PromptOverrides {
+  [key: string]: string;
+}
+
+let cachedOverrides: PromptOverrides | null = null;
+let lastModified: number = 0;
+
+
+function loadOverrides(): PromptOverrides {
+  try {
+    // Check if file exists
+    if (!fs.existsSync(PROMPT_OVERRIDES_YAML_PATH)) {
+      console.log('No prompt_overrides.yaml file found, using default behavior');
+      return {};
+    }
+
+    // Check if we need to reload (file modified)
+    const stats = fs.statSync(PROMPT_OVERRIDES_YAML_PATH);
+    const currentModified = stats.mtime.getTime();
+
+    if (cachedOverrides && currentModified === lastModified) {
+      return cachedOverrides;
+    }
+
+    // Load and parse YAML file
+    const fileContents = fs.readFileSync(PROMPT_OVERRIDES_YAML_PATH, 'utf8');
+    const overrides = yaml.load(fileContents) as PromptOverrides;
+
+    // Update cache
+    cachedOverrides = overrides || {};
+    lastModified = currentModified;
+
+    console.log(`Loaded ${Object.keys(cachedOverrides).length} prompt overrides from YAML`);
+    return cachedOverrides;
+
+  } catch (error) {
+    console.error('Error loading prompt overrides:', error);
+    return {};
+  }
+}
+
+export function getPromptOverride(word: string): string | null {
+  const overrides = loadOverrides();
+  const normalizedWord = word.toLowerCase().trim();
+  
+  return overrides[normalizedWord] || null;
+}
+
+export function hasPromptOverride(word: string): boolean {
+  return getPromptOverride(word) !== null;
+}
 </file>
 
 <file path=".gitignore">
@@ -3030,223 +2669,233 @@ const config = {
 export default config;
 </file>
 
-<file path="app/api/categorize-vocabulary/route.ts">
+<file path="app/api/generate-image/route.ts">
+import Replicate from 'replicate';
 import { NextRequest, NextResponse } from 'next/server';
-import { callOpenRouter, handleOpenRouterError } from '@/lib/openrouter';
-import { languageCardRepository } from '@/lib/db/repository';
-import { CategorizationResult } from '@/types';
-import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
+import { getReplicateModel, createReplicateInput } from '@/lib/replicateConfig';
+import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
+import { saveImageFromUrl } from '@/lib/imageUtils';
 
-export const maxDuration = 60; // 60 seconds timeout
-
-interface CategorizeRequest {
-  entries: Array<{
-    id: number;
-    original_text: string;
-    translation_text: string;
-    level_id: number;
-  }>;
-}
-
-interface CategorizeResponse {
-  results: Array<{
-    id: number;
-    categorization: CategorizationResult;
-  }>;
-  errors: Array<{
-    id: number;
-    error: string;
-  }>;
-}
-
-function createCategorizationPrompt(entry: CategorizeRequest['entries'][0]): string {
-  return `Categorize the following vocabulary word for image generation suitability.
-Word: ${entry.original_text}
-Translation: ${entry.translation_text}
-Context: English language learning, level ${entry.level_id}
-
-Analyze and categorize based on:
-- Concrete/Abstract nature
-- Visual representation potential (HIGH/MEDIUM/LOW)
-- Word type (noun/verb/adjective/adverb/phrase)
-- For polysemous words, identify primary meaning
-- Suggest transformation strategy if abstract
-
-Output JSON only, matching this exact structure with valid values:
-{
-  "primary_category": "CONCRETE-VISUAL" | "ABSTRACT-SYMBOLIC" | "ACTION-VISUAL" | "STATE-METAPHORICAL",
-  "image_suitability": "HIGH" | "MEDIUM" | "LOW",
-  "word_type": "noun" | "verb" | "adjective" | "adverb" | "phrase",
-  "transformation_needed": boolean, // e.g., true or false
-  "transformation_suggestion": "string", // e.g., "represent 'happiness' with a smiling emoji face" or "" if not needed
-  "confidence": number // 0.0-1.0
-}
-
-Example of a valid JSON output:
-{
-  "primary_category": "ABSTRACT-SYMBOLIC",
-  "image_suitability": "MEDIUM",
-  "word_type": "noun",
-  "transformation_needed": true,
-  "transformation_suggestion": "Visualize as an idea lightbulb",
-  "confidence": 0.85
-}`;
-}
-
-async function categorizeEntry(entry: CategorizeRequest['entries'][0]): Promise<CategorizationResult> {
-  const prompt = createCategorizationPrompt(entry);
-  
-  try {
-    console.log(`Sending categorization request for "${entry.original_text}"`);
-    console.log('Using OpenRouter with model:', process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-preview-05-20');
-    
-    const response = await callOpenRouter([
-      {
-        role: 'system',
-        content: 'You are a helpful assistant that categorizes vocabulary words for image generation suitability. Output only valid JSON. No explanations.'
-      },
-      {
-        role: 'user',
-        content: prompt
-      }
-    ], {
-      temperature: 0.1,
-      max_tokens: 8192,
-      response_format: { type: 'json_object' }
-    });
-    
-    console.log(`OpenRouter response for "${entry.original_text}":`, response);
-    
-    // Parse the response
-    let jsonText = response.trim();
-    
-    // Remove markdown code blocks if present
-    if (jsonText.includes('```json')) {
-      jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    } else if (jsonText.includes('```')) {
-      jsonText = jsonText.replace(/```\s*/g, '').trim();
-    }
-    
-    // Extract JSON object if there's extra text
-    const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
-    jsonText = jsonMatch ? jsonMatch[0] : jsonText;
-    
-    console.log(`[Categorization] Attempting to parse JSON for entry ID ${entry.id}:`, jsonText);
-    let categorization: CategorizationResult;
-    try {
-      categorization = JSON.parse(jsonText) as CategorizationResult;
-    } catch (parseError) {
-      console.error('JSON parse error:', parseError);
-      console.error('Failed to parse text:', jsonText);
-      console.error('Original response text:', response);
-      throw new Error(`JSON parse error: ${parseError instanceof Error ? parseError.message : 'Unknown parse error'}`);
-    }
-    console.log(`[Categorization] Successfully parsed categorization for entry ID ${entry.id}:`, categorization);
-    
-    // Validate the response structure
-    if (!categorization.primary_category || !categorization.image_suitability || categorization.word_type === undefined) {
-      throw new Error('Invalid categorization response structure');
-    }
-    
-    // Ensure boolean type for transformation_needed
-    categorization.transformation_needed = Boolean(categorization.transformation_needed);
-    
-    // Ensure string type for transformation_suggestion
-    categorization.transformation_suggestion = categorization.transformation_suggestion || '';
-    
-    // Ensure confidence is a number between 0 and 1
-    categorization.confidence = Math.max(0, Math.min(1, Number(categorization.confidence) || 0.5));
-    
-    return categorization;
-  } catch (error) {
-    console.error(`[Categorization] Failed to categorize entry ID: ${entry.id}, Word: "${entry.original_text}". Error:`, error);
-    
-    // Use the OpenRouter error handler for better error messages
-    const errorInfo = handleOpenRouterError(error);
-    console.error('Handled error info:', errorInfo);
-    throw new Error(errorInfo.message);
-  }
-}
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN!,
+});
 
 export async function POST(request: NextRequest) {
-  return handleApiRequest(request, async (_req, body: CategorizeRequest) => {
-    // Validate request
-    const validation = validateRequestArray(body.entries, 'entries');
+  return handleApiRequest(request, async (_req, body: { prompt: string; entryId: number; englishWord: string }) => {
+    const validation = validateRequestBody(body, ['prompt', 'entryId', 'englishWord']);
     if (!validation.valid) {
       return NextResponse.json({ error: validation.error }, { status: validation.status });
     }
+
+    const { prompt, entryId } = body;
+
+    let output;
+    try {
+      output = await replicate.run(
+        getReplicateModel(),
+        {
+          input: createReplicateInput(prompt),
+        }
+      );
+    } catch (error: any) {
+      console.error('Replicate API error:', error);
+      
+      // Handle specific Replicate API errors
+      if (error.message?.includes('Invalid token') || error.message?.includes('Unauthorized')) {
+        return NextResponse.json(
+          { error: 'Invalid API token. Please check your REPLICATE_API_TOKEN in .env.local' },
+          { status: 401 }
+        );
+      }
+      
+      if (error.message?.includes('rate limit')) {
+        return NextResponse.json(
+          { error: 'Rate limit exceeded. Please try again later.' },
+          { status: 429 }
+        );
+      }
+      
+      throw error; // Re-throw to let handleApiRequest handle it
+    }
+
+    console.log('Raw output from replicate.run:', output);
+    console.log('Output type:', typeof output);
+    console.log('Is array?', Array.isArray(output));
+
+    // The output from replicate.run() is typically an array of FileOutput objects
+    // For SDXL-emoji with num_outputs: 1, it should be an array with one FileOutput
+    let imageUrl: string;
     
-    if (body.entries.length > 10) {
-      return NextResponse.json({ error: 'Invalid request: maximum 10 entries allowed per batch' }, { status: 400 });
+    if (Array.isArray(output) && output.length > 0) {
+      // Get the first FileOutput object and call .url() to get the URL
+      const fileOutput = output[0] as any;
+      const urlResult = fileOutput.url ? fileOutput.url() : fileOutput.toString();
+      imageUrl = urlResult.toString(); // Convert URL object to string
+      console.log('Extracted imageUrl from FileOutput:', imageUrl);
+    } else if (output && typeof output === 'object' && 'url' in output) {
+      // Handle case where it might be a single FileOutput object
+      const urlResult = (output as any).url();
+      imageUrl = urlResult.toString(); // Convert URL object to string
+      console.log('Extracted imageUrl from single FileOutput:', imageUrl);
+    } else if (typeof output === 'string') {
+      // Handle case where it might already be a URL string
+      imageUrl = output;
+      console.log('Output was already a string URL:', imageUrl);
+    } else {
+      console.error('Unexpected output format:', output);
+      throw new Error('Unexpected output format from Replicate');
     }
     
-    const response: CategorizeResponse = {
-      results: [],
-      errors: [],
-    };
-    
-    // Process entries in parallel
-    const promises = body.entries.map(async (entry) => {
-      try {
-        // Update status to processing
-        await languageCardRepository.update(entry.id, {
-          categorizationStatus: 'processing',
-        });
-        
-        // Categorize the entry
-        const categorization = await categorizeEntry(entry);
-        console.log(`Successfully categorized entry ${entry.id}:`, categorization);
-        
-        // Save categorization to database
-        await languageCardRepository.update(entry.id, {
-          categorization,
-          categorizationStatus: 'completed',
-        });
-        
-        response.results.push({
-          id: entry.id,
-          categorization,
-        });
-        console.log(`Added to results array. Current results length: ${response.results.length}`);
-      } catch (error) {
-        console.error(`=== ENTRY ${entry.id} ERROR ===`);
-        console.error(`Failed to categorize entry ${entry.id}:`, error);
-        console.error(`Entry details:`, {
-          id: entry.id,
-          original_text: entry.original_text,
-          translation_text: entry.translation_text,
-          level_id: entry.level_id
-        });
-        console.error('Error details:', {
-          message: error instanceof Error ? error.message : String(error),
-          name: error instanceof Error ? error.name : 'Unknown',
-          stack: error instanceof Error ? error.stack : 'No stack',
-        });
-        console.error(`=== END ENTRY ${entry.id} ERROR ===`);
-        
-        // Update status to error
-        await languageCardRepository.update(entry.id, {
-          categorizationStatus: 'error',
-        });
-        
-        response.errors.push({
-          id: entry.id,
-          error: `Word "${entry.original_text}": ${error instanceof Error ? error.message : 'Unknown error'}`,
-        });
-      }
-    });
-    
-    await Promise.all(promises);
-    
-    console.log('Final response being sent:', {
-      resultsCount: response.results.length,
-      errorsCount: response.errors.length,
-      results: response.results,
-      errors: response.errors
-    });
-    
-    return NextResponse.json(response);
+    // Validate that we got a valid URL
+    if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.startsWith('http')) {
+      console.error('Invalid imageUrl received:', imageUrl);
+      return NextResponse.json(
+        { error: 'Failed to get a valid image URL' },
+        { status: 500 }
+      );
+    }
+
+    // Download and save the image locally
+    try {
+      const result = await saveImageFromUrl(imageUrl, entryId);
+      const generatedAt = new Date().toISOString();
+      
+      return NextResponse.json({ 
+        imageUrl: result.localImageUrl, // Return local path with cache-buster for the app to use
+        originalUrl: result.originalUrl, // Keep original URL as backup
+        localPath: result.localPath,
+        filename: result.filename,
+        status: 'completed',
+        generatedAt: generatedAt, // Add timestamp for sorting
+      });
+    } catch (downloadError) {
+      console.error('Error downloading/saving image:', downloadError);
+      // If download fails, still return the original URL
+      return NextResponse.json({ 
+        imageUrl,
+        status: 'completed',
+        downloadError: 'Failed to save image locally, using remote URL',
+      });
+    }
   });
+}
+</file>
+
+<file path="app/api/queue-image/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { imageQueue } from '@/lib/imageQueue';
+import { handleApiRequest, validateRequestBody } from '@/lib/apiUtils';
+
+// In-memory storage for completion callbacks
+const completionCallbacks = new Map<string, (result: any) => void>();
+const errorCallbacks = new Map<string, (error: string) => void>();
+
+// Set up notification handlers on the queue instance
+(imageQueue as any).notifyCompletion = function(item: any, result: any) {
+  const callback = completionCallbacks.get(item.id);
+  if (callback) {
+    callback(result);
+    completionCallbacks.delete(item.id);
+  }
+};
+
+(imageQueue as any).notifyError = function(item: any, error: string) {
+  const errorCallback = errorCallbacks.get(item.id);
+  if (errorCallback) {
+    errorCallback(error);
+    errorCallbacks.delete(item.id);
+  }
+};
+
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: { action: string; [key: string]: any }) => {
+    const validation = validateRequestBody(body, ['action']);
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
+    }
+
+    const { action, ...data } = body;
+
+    switch (action) {
+      case 'add':
+        return handleAddToQueue(data);
+      case 'status':
+        return handleGetStatus();
+      case 'items':
+        return handleGetItems();
+      default:
+        return NextResponse.json(
+          { error: 'Invalid action' },
+          { status: 400 }
+        );
+    }
+  });
+}
+
+async function handleAddToQueue(data: any) {
+  const { entryId, englishWord, prompt } = data;
+
+  console.log(`API: Adding to queue - entryId: ${entryId}, word: ${englishWord}`);
+
+  if (!entryId || !englishWord || !prompt) {
+    console.log('API: Missing required fields:', { entryId, englishWord, prompt: !!prompt });
+    return NextResponse.json(
+      { error: 'Missing required fields: entryId, englishWord, prompt' },
+      { status: 400 }
+    );
+  }
+
+  try {
+    // Add to queue
+    console.log(`API: Adding to imageQueue...`);
+    const queueId = await imageQueue.addToQueue(entryId, englishWord, prompt);
+    console.log(`API: Added to queue with ID: ${queueId}`);
+
+    // Create a promise that resolves when the image is generated
+    const resultPromise = new Promise<any>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        completionCallbacks.delete(queueId);
+        errorCallbacks.delete(queueId);
+        reject(new Error('Generation timeout'));
+      }, 300000); // 5 minute timeout
+
+      completionCallbacks.set(queueId, (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      });
+
+      errorCallbacks.set(queueId, (error) => {
+        clearTimeout(timeout);
+        reject(new Error(error));
+      });
+    });
+
+    // Wait for completion
+    const result = await resultPromise;
+
+    return NextResponse.json({
+      queueId,
+      status: 'completed',
+      ...result,
+    });
+
+  } catch (error: any) {
+    console.error('Error adding to queue:', error);
+    return NextResponse.json(
+      { error: error.message || 'Failed to generate image' },
+      { status: 500 }
+    );
+  }
+}
+
+async function handleGetStatus() {
+  const status = imageQueue.getQueueStatus();
+  return NextResponse.json(status);
+}
+
+async function handleGetItems() {
+  const items = imageQueue.getQueueItems();
+  return NextResponse.json({ items });
 }
 </file>
 
@@ -3624,6 +3273,47 @@ export default function QueueStatus() {
 }
 </file>
 
+<file path="lib/db/database.ts">
+import Database from 'better-sqlite3';
+import { Kysely, SqliteDialect } from 'kysely';
+import { Database as DatabaseType, DB } from './schema';
+import { createTables } from './migrations';
+import { runMigrations } from './runMigrations';
+import { DATABASE_FILE_PATH } from '../paths';
+
+let db: DB | null = null;
+
+export function getDatabase(): DB {
+  if (!db) {
+    const dbPath = process.env.DATABASE_PATH || DATABASE_FILE_PATH;
+    
+    const sqlite = new Database(dbPath);
+    sqlite.pragma('journal_mode = WAL');
+    
+    db = new Kysely<DatabaseType>({
+      dialect: new SqliteDialect({
+        database: sqlite,
+      }),
+    });
+    
+    // Initialize tables if they don't exist
+    createTables(db);
+    
+    // Run migrations
+    runMigrations();
+  }
+  
+  return db;
+}
+
+export function closeDatabase(): void {
+  if (db) {
+    db.destroy();
+    db = null;
+  }
+}
+</file>
+
 <file path="lib/db/repository.ts">
 import { getDatabase } from './database';
 import { WordEntryTable } from './schema';
@@ -3996,6 +3686,96 @@ export async function processBatch<TPayload, TResult extends { id: number }, TEr
 }
 </file>
 
+<file path="lib/gemini.ts">
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { handleAiServiceError, AI_SERVICE_CONFIGS } from './aiUtils';
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+
+export const GEMINI_MODEL = 'gemini-2.5-flash-preview-05-20';
+
+export const CORE_PROMPT_INSTRUCTIONS = `Generate ONE emoji object for: {english_word}
+
+Rules:
+1. Object MUST visually represent the word's meaning
+2. Maximum 4 words
+3. Single object only
+4. Choose most memorable/iconic association
+5. If describing people, use light-skinned or yellow emoji-style characters
+6. FORBIDDEN: "vibrant", "representing", "showing", generic descriptions
+
+Think: What visual helps remember this word?
+
+Examples:
+"autumn" → "orange fall leaf" (NOT green leaf)
+"winter" → "snowflake" (NOT generic season)
+"happy" → "smiling face"
+"article" → "newspaper"
+"above" → "upward arrow"
+"actor" → "light-skinned man in suit"
+
+Word: {english_word}
+Single object:`;
+
+export const PROMPT_TEMPLATE = `${CORE_PROMPT_INSTRUCTIONS}
+
+English: {english} {transcription}
+Russian: {russian}`;
+
+export const BATCH_PROMPT_TEMPLATE = `For each word below, generate ONE emoji object following these rules:
+
+1. Object MUST visually represent the word's meaning
+2. Maximum 4 words
+3. Single object only
+4. Choose most memorable/iconic association
+5. If describing people, use light-skinned or yellow emoji-style characters
+6. FORBIDDEN: "vibrant", "representing", "showing", generic descriptions
+
+Think: What visual helps remember this word?
+
+Examples:
+"autumn" → "orange fall leaf" (NOT green leaf)
+"winter" → "snowflake" (NOT generic season)
+"happy" → "smiling face"
+"article" → "newspaper"
+"above" → "upward arrow"
+"actor" → "light-skinned man in suit"
+
+Return your response as a JSON array where each object has an "id" field matching the input id and a "prompt" field with the single object description.
+
+Word pairs:
+{wordPairs}
+
+Return valid JSON only, no markdown formatting.`;
+
+export function getGeminiModel() {
+  return genAI.getGenerativeModel({ 
+    model: GEMINI_MODEL,
+    systemInstruction: 'Output only valid JSON. No explanations.'
+  });
+}
+
+export function formatSinglePrompt(english: string, russian: string, transcription: string): string {
+  return PROMPT_TEMPLATE
+    .replace('{english_word}', english)
+    .replace('{english}', english)
+    .replace('{transcription}', transcription)
+    .replace('{russian}', russian);
+}
+
+export function formatBatchPrompt(entries: Array<{ id: number; english: string; russian: string; transcription: string }>): string {
+  const wordPairs = entries.map(entry => 
+    `ID: ${entry.id}\nEnglish: ${entry.english} ${entry.transcription}\nRussian: ${entry.russian}`
+  ).join('\n\n');
+  
+  return BATCH_PROMPT_TEMPLATE.replace('{wordPairs}', wordPairs);
+}
+
+export function handleGeminiError(error: any) {
+  return handleAiServiceError(error, AI_SERVICE_CONFIGS.gemini);
+}
+</file>
+
 <file path="lib/replicateConfig.ts">
 // Centralized Replicate configuration - single source of truth
 export const REPLICATE_CONFIG = {
@@ -4031,6 +3811,397 @@ export function createReplicateInput(prompt: string) {
 export function getReplicateModel() {
   return REPLICATE_CONFIG.model;
 }
+</file>
+
+<file path="app/api/categorize-vocabulary/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { callOpenRouter, handleOpenRouterError } from '@/lib/openrouter';
+import { languageCardRepository } from '@/lib/db/repository';
+import { CategorizationResult } from '@/types';
+import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
+
+export const maxDuration = 60; // 60 seconds timeout
+
+interface CategorizeRequest {
+  entries: Array<{
+    id: number;
+    original_text: string;
+    translation_text: string;
+    level_id: number;
+  }>;
+}
+
+interface CategorizeResponse {
+  results: Array<{
+    id: number;
+    categorization: CategorizationResult;
+  }>;
+  errors: Array<{
+    id: number;
+    error: string;
+  }>;
+}
+
+function createCategorizationPrompt(entry: CategorizeRequest['entries'][0]): string {
+  return `Categorize the following vocabulary word for image generation suitability.
+Word: ${entry.original_text}
+Translation: ${entry.translation_text}
+Context: English language learning, level ${entry.level_id}
+
+Analyze and categorize based on:
+- Concrete/Abstract nature
+- Visual representation potential (HIGH/MEDIUM/LOW)
+- Word type (noun/verb/adjective/adverb/phrase)
+- For polysemous words, identify primary meaning
+- Suggest transformation strategy if abstract
+
+Output JSON only, matching this exact structure with valid values:
+{
+  "primary_category": "CONCRETE-VISUAL" | "ABSTRACT-SYMBOLIC" | "ACTION-VISUAL" | "STATE-METAPHORICAL",
+  "image_suitability": "HIGH" | "MEDIUM" | "LOW",
+  "word_type": "noun" | "verb" | "adjective" | "adverb" | "phrase",
+  "transformation_needed": boolean, // e.g., true or false
+  "transformation_suggestion": "string", // e.g., "represent 'happiness' with a smiling emoji face" or "" if not needed
+  "confidence": number // 0.0-1.0
+}
+
+Example of a valid JSON output:
+{
+  "primary_category": "ABSTRACT-SYMBOLIC",
+  "image_suitability": "MEDIUM",
+  "word_type": "noun",
+  "transformation_needed": true,
+  "transformation_suggestion": "Visualize as an idea lightbulb",
+  "confidence": 0.85
+}`;
+}
+
+async function categorizeEntry(entry: CategorizeRequest['entries'][0]): Promise<CategorizationResult> {
+  const prompt = createCategorizationPrompt(entry);
+  
+  try {
+    console.log(`Sending categorization request for "${entry.original_text}"`);
+    console.log('Using OpenRouter with model:', process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-preview-05-20');
+    
+    const response = await callOpenRouter([
+      {
+        role: 'system',
+        content: 'You are a helpful assistant that categorizes vocabulary words for image generation suitability. Output only valid JSON. No explanations.'
+      },
+      {
+        role: 'user',
+        content: prompt
+      }
+    ], {
+      temperature: 0.1,
+      max_tokens: 8192,
+      response_format: { type: 'json_object' }
+    });
+    
+    console.log(`OpenRouter response for "${entry.original_text}":`, response);
+    
+    // Parse the response
+    let jsonText = response.trim();
+    
+    // Remove markdown code blocks if present
+    if (jsonText.includes('```json')) {
+      jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    } else if (jsonText.includes('```')) {
+      jsonText = jsonText.replace(/```\s*/g, '').trim();
+    }
+    
+    // Extract JSON object if there's extra text
+    const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+    jsonText = jsonMatch ? jsonMatch[0] : jsonText;
+    
+    console.log(`[Categorization] Attempting to parse JSON for entry ID ${entry.id}:`, jsonText);
+    let categorization: CategorizationResult;
+    try {
+      categorization = JSON.parse(jsonText) as CategorizationResult;
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError);
+      console.error('Failed to parse text:', jsonText);
+      console.error('Original response text:', response);
+      throw new Error(`JSON parse error: ${parseError instanceof Error ? parseError.message : 'Unknown parse error'}`);
+    }
+    console.log(`[Categorization] Successfully parsed categorization for entry ID ${entry.id}:`, categorization);
+    
+    // Validate the response structure
+    if (!categorization.primary_category || !categorization.image_suitability || categorization.word_type === undefined) {
+      throw new Error('Invalid categorization response structure');
+    }
+    
+    // Ensure boolean type for transformation_needed
+    categorization.transformation_needed = Boolean(categorization.transformation_needed);
+    
+    // Ensure string type for transformation_suggestion
+    categorization.transformation_suggestion = categorization.transformation_suggestion || '';
+    
+    // Ensure confidence is a number between 0 and 1
+    categorization.confidence = Math.max(0, Math.min(1, Number(categorization.confidence) || 0.5));
+    
+    return categorization;
+  } catch (error) {
+    console.error(`[Categorization] Failed to categorize entry ID: ${entry.id}, Word: "${entry.original_text}". Error:`, error);
+    
+    // Use the OpenRouter error handler for better error messages
+    const errorInfo = handleOpenRouterError(error);
+    console.error('Handled error info:', errorInfo);
+    throw new Error(errorInfo.message);
+  }
+}
+
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async (_req, body: CategorizeRequest) => {
+    // Validate request
+    const validation = validateRequestArray(body.entries, 'entries');
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
+    }
+    
+    if (body.entries.length > 10) {
+      return NextResponse.json({ error: 'Invalid request: maximum 10 entries allowed per batch' }, { status: 400 });
+    }
+    
+    const response: CategorizeResponse = {
+      results: [],
+      errors: [],
+    };
+    
+    // Process entries in parallel
+    const promises = body.entries.map(async (entry) => {
+      try {
+        // Update status to processing
+        await languageCardRepository.update(entry.id, {
+          categorizationStatus: 'processing',
+        });
+        
+        // Categorize the entry
+        const categorization = await categorizeEntry(entry);
+        console.log(`Successfully categorized entry ${entry.id}:`, categorization);
+        
+        // Save categorization to database
+        await languageCardRepository.update(entry.id, {
+          categorization,
+          categorizationStatus: 'completed',
+        });
+        
+        response.results.push({
+          id: entry.id,
+          categorization,
+        });
+        console.log(`Added to results array. Current results length: ${response.results.length}`);
+      } catch (error) {
+        console.error(`=== ENTRY ${entry.id} ERROR ===`);
+        console.error(`Failed to categorize entry ${entry.id}:`, error);
+        console.error(`Entry details:`, {
+          id: entry.id,
+          original_text: entry.original_text,
+          translation_text: entry.translation_text,
+          level_id: entry.level_id
+        });
+        console.error('Error details:', {
+          message: error instanceof Error ? error.message : String(error),
+          name: error instanceof Error ? error.name : 'Unknown',
+          stack: error instanceof Error ? error.stack : 'No stack',
+        });
+        console.error(`=== END ENTRY ${entry.id} ERROR ===`);
+        
+        // Update status to error
+        await languageCardRepository.update(entry.id, {
+          categorizationStatus: 'error',
+        });
+        
+        response.errors.push({
+          id: entry.id,
+          error: `Word "${entry.original_text}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+        });
+      }
+    });
+    
+    await Promise.all(promises);
+    
+    console.log('Final response being sent:', {
+      resultsCount: response.results.length,
+      errorsCount: response.errors.length,
+      results: response.results,
+      errors: response.errors
+    });
+    
+    return NextResponse.json(response);
+  });
+}
+</file>
+
+<file path="types/index.ts">
+export interface CategorizationResult {
+  primary_category: 'CONCRETE-VISUAL' | 'ABSTRACT-SYMBOLIC' | 'ACTION-VISUAL' | 'STATE-METAPHORICAL';
+  image_suitability: 'HIGH' | 'MEDIUM' | 'LOW';
+  word_type: 'noun' | 'verb' | 'adjective' | 'adverb' | 'phrase' | null;
+  transformation_needed: boolean;
+  transformation_suggestion: string;
+  confidence: number;
+}
+
+export interface WordEntry {
+  id: number;
+  original_text: string;
+  translation_text: string;
+  level_id: number;
+  transcription: string;
+  prompt?: string;
+  imageUrl?: string;
+  imageStatus: 'none' | 'queued' | 'processing' | 'completed' | 'error';
+  promptStatus: 'none' | 'generating' | 'completed' | 'error';
+  replicateId?: string;
+  qaScore?: 'good' | 'bad' | null;
+  imageGeneratedAt?: string; // ISO timestamp when image was generated
+  categorization?: CategorizationResult;
+  categorizationStatus?: 'none' | 'processing' | 'completed' | 'error';
+}
+
+export interface AppState {
+  entries: WordEntry[];
+  currentPage: number;
+  itemsPerPage: number;
+  searchQuery: string;
+  levelFilter: number | null;
+  sortBy: string;
+  sortOrder: 'asc' | 'desc';
+  activeTab: 'table' | 'gallery';
+}
+
+export interface JSONImportData {
+  id: number;
+  original_text: string;
+  translation_text: string;
+  level_id: number;
+  transcription: string;
+}
+</file>
+
+<file path="CLAUDE.md">
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+SDXL Emoji Pipeline is a Next.js application that generates emoji-style images for language learning vocabulary cards. It processes JSON vocabulary data, uses AI to categorize words and generate prompts, then creates emoji-style images using SDXL-emoji model.
+
+## Commands
+
+```bash
+# Development
+npm run dev          # Start development server with Turbopack on http://localhost:3000
+
+# Production
+npm run build        # Build for production
+npm run start        # Start production server
+
+# Code Quality
+npm run lint         # Run ESLint
+```
+
+## Architecture
+
+- **Next.js 15.3.2 App Router**: All pages in `/app`, API routes in `/app/api`
+- **Database**: SQLite with Kysely ORM, stored at `/data/language-cards.db`
+- **State Management**: Zustand store in `/store/useAppStore.ts`
+- **AI Integration**:
+  - OpenRouter API (with Gemini model) for categorization
+  - Google Gemini AI for prompt generation
+  - Replicate API with SDXL-emoji model for image generation
+- **Image Storage**: Downloaded to `/public/images/` locally
+
+## Key Workflows
+
+1. **Word Categorization**: `/app/api/categorize-vocabulary` determines if words are suitable for image generation
+2. **Prompt Generation**: `/app/api/generate-prompts-batch` creates SDXL prompts (batch of 10)
+3. **Image Generation**: Queue system in `/lib/imageQueue.ts` handles sequential processing
+4. **Database Operations**: Repository pattern in `/lib/db/repository.ts`
+
+## Environment Variables
+
+Required in `.env.local`:
+```
+GEMINI_API_KEY=your_google_gemini_key
+REPLICATE_API_TOKEN=your_replicate_token
+OPENROUTER_API_KEY=your_openrouter_key  # Optional, defaults to provided key
+OPENROUTER_MODEL=google/gemini-2.5-flash-preview-05-20  # Optional
+```
+
+## Database Migrations
+
+Run migrations automatically on startup. New migrations go in `/lib/db/migrations/` following the naming pattern `XXX_description.ts`.
+
+## API Response Patterns
+
+All API routes return consistent JSON:
+- Success: `{ success: true, data: ... }`
+- Error: `{ success: false, error: "message" }`
+
+## Testing
+
+No test framework is currently configured. When adding tests, update this section with the test command.
+</file>
+
+<file path="README.md">
+# SDXL Emoji Pipeline
+
+## tech
+
+Next.js / Gemini AI / Replicate SDXL-emoji
+
+### Как запустить проект
+
+1. **Установите зависимости:**
+```bash
+npm install
+```
+
+2. **Создайте файл `.env.local` с API ключами:**
+```env
+GEMINI_API_KEY=ваш_ключ_google_gemini
+REPLICATE_API_TOKEN=ваш_токен_replicate
+```
+
+3. **Запустите проект:**
+```bash
+npm run dev
+```
+
+4. **Откройте в браузере:** [http://localhost:3000](http://localhost:3000)
+
+### Как это работает
+
+1. **Загрузка данных**: Загрузите JSON файл со словами (формат: original_text, translation_text, transcription)
+2. **Категоризация**: Нажмите "Categorize All Uncategorized" - AI определит тип слова для оптимальной генерации
+3. **Генерация промптов**: Нажмите "Generate All Prompts" - AI создаст описания сцен в стиле эмодзи
+4. **Создание изображений**: Нажмите "Generate Image" - SDXL-emoji создаст уникальные картинки
+5. **Галерея**: Просмотрите результаты, оцените качество (✅/❌)
+6. **Экспорт**: Скачайте улучшенный датасет с промптами и картинками
+
+**Важно**: Все промпты автоматически начинаются с "TOK emoji of" - это активирует стиль эмодзи!
+
+### Экономия ресурсов
+
+Для тестирования используйте пакетную обработку по N записей вместо полной загрузки:
+- **Категоризация**: обрабатывает по 10 слов за раз
+- **Генерация промптов**: можно запускать для выбранного количества записей
+
+### Настройки
+
+**Модель Gemini**: `lib/gemini.ts` - строка с `model: 'gemini-2.5-flash-preview-05-20'`
+
+**Промпт категоризации**: `app/api/categorize-vocabulary/route.ts` - промпт с категориями CONCRETE-VISUAL, ABSTRACT-SYMBOLIC и т.д.
+
+**Шаблон промпта для изображений**: `lib/gemini.ts` - функция `generatePrompt()`, правила генерации объектов
+
+**Настройки SDXL-emoji**: `lib/replicateConfig.ts`
+- Модель: `fofr/sdxl-emoji`
+- Префикс промпта: `A TOK emoji of` (обязательно!)
+- Параметры: lora_scale: 0.6, guidance_scale: 7.5, num_inference_steps: 50
 </file>
 
 <file path="app/api/generate-prompt/route.ts">
@@ -4164,6 +4335,88 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ prompts: sortedResults });
   });
+}
+</file>
+
+<file path="app/page.tsx">
+'use client';
+
+import { useState } from 'react';
+import { useAppStore } from '@/store/useAppStore';
+import FileUpload from '@/components/FileUpload';
+import DataTable from '@/components/DataTable';
+import Gallery from '@/components/Gallery';
+import ASCIILogo from '@/components/ASCIILogo';
+import QueueStatus from '@/components/QueueStatus';
+import { FileText, Image } from 'lucide-react';
+
+export default function Home() {
+  const { entries, activeTab, setActiveTab, isInitialized } = useAppStore();
+  const hasData = entries.length > 0;
+
+  // Show loading state if store isn't initialized yet
+  if (!isInitialized) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="text-center">
+          <div className="mb-4">
+            <ASCIILogo />
+          </div>
+          <div className="text-gray-400">Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-black">
+      <main className="px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-8 flex justify-center">
+          <ASCIILogo />
+        </div>
+        
+        {!hasData ? (
+          <FileUpload />
+        ) : (
+          <>
+            <div className="mb-6 bg-gray-900 rounded-lg shadow-sm border border-gray-800">
+              <div className="border-b border-gray-800">
+                <nav className="flex -mb-px">
+                  <button
+                    onClick={() => setActiveTab('table')}
+                    className={`
+                      group inline-flex items-center px-6 py-4 text-sm font-medium transition-colors
+                      ${activeTab === 'table' ? 'tab-active' : 'tab-inactive'}
+                    `}
+                  >
+                    <FileText className="mr-2 h-4 w-4" />
+                    [TABLE]
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('gallery')}
+                    className={`
+                      group inline-flex items-center px-6 py-4 text-sm font-medium transition-colors
+                      ${activeTab === 'gallery' ? 'tab-active' : 'tab-inactive'}
+                    `}
+                  >
+                    <Image className="mr-2 h-4 w-4" />
+                    [GALLERY]
+                  </button>
+                </nav>
+              </div>
+              
+              <div className="p-6">
+                {activeTab === 'table' ? <DataTable /> : <Gallery />}
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+      
+      {/* Queue Status - shows when there are items in queue */}
+      <QueueStatus />
+    </div>
+  );
 }
 </file>
 
@@ -4557,21 +4810,36 @@ export const useAppStore = create<AppStore>()((set, get) => ({
       },
       
       loadFromDatabase: async () => {
+        set(state => ({ ...state, isInitialized: false })); // Indicate loading starts
         try {
           const response = await fetch('/api/language-cards');
           if (response.ok) {
-            const entries = await response.json();
-            if (entries.length > 0) {
-              set({ entries, isInitialized: true });
-            } else {
-              set({ isInitialized: true });
-            }
+            let loadedEntries: WordEntry[] = await response.json();
+            const entries = loadedEntries.map(entry => {
+              const updatedEntry = { ...entry };
+              if (updatedEntry.promptStatus === 'generating') {
+                // Prompt generation was interrupted, reset status
+                updatedEntry.promptStatus = 'error'; 
+                console.log(`Resetting stuck promptStatus to 'error' for entry ID ${entry.id}`);
+              }
+              if (updatedEntry.imageStatus === 'processing') {
+                // Single image generation was interrupted, reset status
+                updatedEntry.imageStatus = 'error';
+                console.log(`Resetting stuck imageStatus 'processing' to 'error' for entry ID ${entry.id}`);
+              }
+              // Note: 'queued' status (typically from batch operations) is left as is.
+              // The server-side queue is in-memory, so these might also be stale after a server restart.
+              // A more advanced system might involve checking job statuses against the server if the queue were persistent.
+              return updatedEntry;
+            });
+            set({ entries, isInitialized: true });
           } else {
-            set({ isInitialized: true });
+            console.error('Failed to load from database, server responded with an error:', response.status);
+            set({ entries: [], isInitialized: true }); // Initialize with empty on server error, but mark as done
           }
         } catch (error) {
-          console.error('Failed to load from database:', error);
-          set({ isInitialized: true });
+          console.error('Failed to load from database (network error or JSON parsing issue):', error);
+          set({ entries: [], isInitialized: true }); // Initialize with empty on catch, but mark as done
         }
       },
     }));
@@ -4579,259 +4847,6 @@ export const useAppStore = create<AppStore>()((set, get) => ({
 // Initialize database on first load
 if (typeof window !== 'undefined') {
   useAppStore.getState().loadFromDatabase();
-}
-</file>
-
-<file path="types/index.ts">
-export interface CategorizationResult {
-  primary_category: 'CONCRETE-VISUAL' | 'ABSTRACT-SYMBOLIC' | 'ACTION-VISUAL' | 'STATE-METAPHORICAL';
-  image_suitability: 'HIGH' | 'MEDIUM' | 'LOW';
-  word_type: 'noun' | 'verb' | 'adjective' | 'adverb' | 'phrase' | null;
-  transformation_needed: boolean;
-  transformation_suggestion: string;
-  confidence: number;
-}
-
-export interface WordEntry {
-  id: number;
-  original_text: string;
-  translation_text: string;
-  level_id: number;
-  transcription: string;
-  prompt?: string;
-  imageUrl?: string;
-  imageStatus: 'none' | 'queued' | 'processing' | 'completed' | 'error';
-  promptStatus: 'none' | 'generating' | 'completed' | 'error';
-  replicateId?: string;
-  qaScore?: 'good' | 'bad' | null;
-  imageGeneratedAt?: string; // ISO timestamp when image was generated
-  categorization?: CategorizationResult;
-  categorizationStatus?: 'none' | 'processing' | 'completed' | 'error';
-}
-
-export interface AppState {
-  entries: WordEntry[];
-  currentPage: number;
-  itemsPerPage: number;
-  searchQuery: string;
-  levelFilter: number | null;
-  sortBy: string;
-  sortOrder: 'asc' | 'desc';
-  activeTab: 'table' | 'gallery';
-}
-
-export interface JSONImportData {
-  id: number;
-  original_text: string;
-  translation_text: string;
-  level_id: number;
-  transcription: string;
-}
-</file>
-
-<file path="CLAUDE.md">
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Project Overview
-
-SDXL Emoji Pipeline is a Next.js application that generates emoji-style images for language learning vocabulary cards. It processes JSON vocabulary data, uses AI to categorize words and generate prompts, then creates emoji-style images using SDXL-emoji model.
-
-## Commands
-
-```bash
-# Development
-npm run dev          # Start development server with Turbopack on http://localhost:3000
-
-# Production
-npm run build        # Build for production
-npm run start        # Start production server
-
-# Code Quality
-npm run lint         # Run ESLint
-```
-
-## Architecture
-
-- **Next.js 15.3.2 App Router**: All pages in `/app`, API routes in `/app/api`
-- **Database**: SQLite with Kysely ORM, stored at `/data/language-cards.db`
-- **State Management**: Zustand store in `/store/useAppStore.ts`
-- **AI Integration**:
-  - OpenRouter API (with Gemini model) for categorization
-  - Google Gemini AI for prompt generation
-  - Replicate API with SDXL-emoji model for image generation
-- **Image Storage**: Downloaded to `/public/images/` locally
-
-## Key Workflows
-
-1. **Word Categorization**: `/app/api/categorize-vocabulary` determines if words are suitable for image generation
-2. **Prompt Generation**: `/app/api/generate-prompts-batch` creates SDXL prompts (batch of 10)
-3. **Image Generation**: Queue system in `/lib/imageQueue.ts` handles sequential processing
-4. **Database Operations**: Repository pattern in `/lib/db/repository.ts`
-
-## Environment Variables
-
-Required in `.env.local`:
-```
-GEMINI_API_KEY=your_google_gemini_key
-REPLICATE_API_TOKEN=your_replicate_token
-OPENROUTER_API_KEY=your_openrouter_key  # Optional, defaults to provided key
-OPENROUTER_MODEL=google/gemini-2.5-flash-preview-05-20  # Optional
-```
-
-## Database Migrations
-
-Run migrations automatically on startup. New migrations go in `/lib/db/migrations/` following the naming pattern `XXX_description.ts`.
-
-## API Response Patterns
-
-All API routes return consistent JSON:
-- Success: `{ success: true, data: ... }`
-- Error: `{ success: false, error: "message" }`
-
-## Testing
-
-No test framework is currently configured. When adding tests, update this section with the test command.
-</file>
-
-<file path="README.md">
-# SDXL Emoji Pipeline
-
-## tech
-
-Next.js / Gemini AI / Replicate SDXL-emoji
-
-### Как запустить проект
-
-1. **Установите зависимости:**
-```bash
-npm install
-```
-
-2. **Создайте файл `.env.local` с API ключами:**
-```env
-GEMINI_API_KEY=ваш_ключ_google_gemini
-REPLICATE_API_TOKEN=ваш_токен_replicate
-```
-
-3. **Запустите проект:**
-```bash
-npm run dev
-```
-
-4. **Откройте в браузере:** [http://localhost:3000](http://localhost:3000)
-
-### Как это работает
-
-1. **Загрузка данных**: Загрузите JSON файл со словами (формат: original_text, translation_text, transcription)
-2. **Категоризация**: Нажмите "Categorize All Uncategorized" - AI определит тип слова для оптимальной генерации
-3. **Генерация промптов**: Нажмите "Generate All Prompts" - AI создаст описания сцен в стиле эмодзи
-4. **Создание изображений**: Нажмите "Generate Image" - SDXL-emoji создаст уникальные картинки
-5. **Галерея**: Просмотрите результаты, оцените качество (✅/❌)
-6. **Экспорт**: Скачайте улучшенный датасет с промптами и картинками
-
-**Важно**: Все промпты автоматически начинаются с "TOK emoji of" - это активирует стиль эмодзи!
-
-### Экономия ресурсов
-
-Для тестирования используйте пакетную обработку по N записей вместо полной загрузки:
-- **Категоризация**: обрабатывает по 10 слов за раз
-- **Генерация промптов**: можно запускать для выбранного количества записей
-
-### Настройки
-
-**Модель Gemini**: `lib/gemini.ts` - строка с `model: 'gemini-2.5-flash-preview-05-20'`
-
-**Промпт категоризации**: `app/api/categorize-vocabulary/route.ts` - промпт с категориями CONCRETE-VISUAL, ABSTRACT-SYMBOLIC и т.д.
-
-**Шаблон промпта для изображений**: `lib/gemini.ts` - функция `generatePrompt()`, правила генерации объектов
-
-**Настройки SDXL-emoji**: `lib/replicateConfig.ts`
-- Модель: `fofr/sdxl-emoji`
-- Префикс промпта: `A TOK emoji of` (обязательно!)
-- Параметры: lora_scale: 0.6, guidance_scale: 7.5, num_inference_steps: 50
-</file>
-
-<file path="app/page.tsx">
-'use client';
-
-import { useState } from 'react';
-import { useAppStore } from '@/store/useAppStore';
-import FileUpload from '@/components/FileUpload';
-import DataTable from '@/components/DataTable';
-import Gallery from '@/components/Gallery';
-import ASCIILogo from '@/components/ASCIILogo';
-import QueueStatus from '@/components/QueueStatus';
-import { FileText, Image } from 'lucide-react';
-
-export default function Home() {
-  const { entries, activeTab, setActiveTab, isInitialized } = useAppStore();
-  const hasData = entries.length > 0;
-
-  // Show loading state if store isn't initialized yet
-  if (!isInitialized) {
-    return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="text-center">
-          <div className="mb-4">
-            <ASCIILogo />
-          </div>
-          <div className="text-gray-400">Loading...</div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-black">
-      <main className="px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8 flex justify-center">
-          <ASCIILogo />
-        </div>
-        
-        {!hasData ? (
-          <FileUpload />
-        ) : (
-          <>
-            <div className="mb-6 bg-gray-900 rounded-lg shadow-sm border border-gray-800">
-              <div className="border-b border-gray-800">
-                <nav className="flex -mb-px">
-                  <button
-                    onClick={() => setActiveTab('table')}
-                    className={`
-                      group inline-flex items-center px-6 py-4 text-sm font-medium transition-colors
-                      ${activeTab === 'table' ? 'tab-active' : 'tab-inactive'}
-                    `}
-                  >
-                    <FileText className="mr-2 h-4 w-4" />
-                    [TABLE]
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('gallery')}
-                    className={`
-                      group inline-flex items-center px-6 py-4 text-sm font-medium transition-colors
-                      ${activeTab === 'gallery' ? 'tab-active' : 'tab-inactive'}
-                    `}
-                  >
-                    <Image className="mr-2 h-4 w-4" />
-                    [GALLERY]
-                  </button>
-                </nav>
-              </div>
-              
-              <div className="p-6">
-                {activeTab === 'table' ? <DataTable /> : <Gallery />}
-              </div>
-            </div>
-          </>
-        )}
-      </main>
-      
-      {/* Queue Status - shows when there are items in queue */}
-      <QueueStatus />
-    </div>
-  );
 }
 </file>
 
@@ -5044,8 +5059,8 @@ export default function DataTable() {
     }
 
     const operationKey = `image-${entry.id}`;
-    updateEntry(entry.id, { imageStatus: 'queued' });
-    activityManager.addActivity('loading', `Queuing image for "${entry.original_text}"`, undefined, operationKey);
+    updateEntry(entry.id, { imageStatus: 'processing' });
+    activityManager.addActivity('loading', `Processing image for "${entry.original_text}"`, undefined, operationKey);
     
     const result = await queueImageService({
       action: 'add',
@@ -5471,7 +5486,11 @@ export default function DataTable() {
               <button
                 onClick={() => handleGenerateImage(entry)}
                 disabled={!entry.prompt || (entry.imageStatus === 'processing' || entry.imageStatus === 'queued')}
-                className="btn-primary"
+                className={`btn-primary ${
+                  (!entry.prompt || (entry.imageStatus === 'processing' || entry.imageStatus === 'queued')) 
+                  ? 'opacity-50 cursor-not-allowed' 
+                  : ''
+                }`}
               >
                 {entry.imageStatus === 'processing' || entry.imageStatus === 'queued' ? (
                   <div className="loading-spinner" />
@@ -5487,7 +5506,7 @@ export default function DataTable() {
         },
       },
     ],
-    [editingId, editingPrompt]
+    [editingId, editingPrompt, entries]
   );
 
   const table = useReactTable({
