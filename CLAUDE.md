@@ -23,7 +23,7 @@ npm run lint         # Run ESLint
 ## Architecture
 
 - **Next.js 15.3.2 App Router**: All pages in `/app`, API routes in `/app/api`
-- **Database**: SQLite with Kysely ORM, stored at `/data/language-cards.db`
+ - **Database**: Postgres with Kysely ORM (connection string from `DATABASE_URL`)
 - **State Management**: Zustand store in `/store/useAppStore.ts`
 - **AI Integration**:
   - OpenRouter API (with Gemini model) for categorization
@@ -47,6 +47,7 @@ GEMINI_API_KEY=your_google_gemini_key
 REPLICATE_API_TOKEN=your_replicate_token
 OPENROUTER_API_KEY=your_openrouter_key  # Optional, defaults to provided key
 OPENROUTER_MODEL=google/gemini-2.5-flash-preview-05-20  # Optional
+DATABASE_URL=your_postgres_connection_string
 ```
 
 ## Database Migrations
