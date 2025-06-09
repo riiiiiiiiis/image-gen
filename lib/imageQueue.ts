@@ -38,8 +38,7 @@ class ImageGenerationQueue {
   private queue: QueueItem[] = [];
   private processing = false;
   private maxRetries = 3;
-  private concurrentLimit = 1; // Process one at a time to avoid rate limits
-  private processingCount = 0;
+  private concurrencyLimit = 8; // Based on research for optimal performance
 
   // Add item to queue
   async addToQueue(entryId: number, englishWord: string, prompt: string): Promise<string> {
@@ -83,23 +82,37 @@ class ImageGenerationQueue {
     console.log(`Starting image queue processing... Total items: ${this.queue.length}`);
 
     while (this.queue.length > 0) {
+      // Get all pending items
       const pendingItems = this.queue.filter(item => item.status === 'pending');
       console.log(`Queue status: Total=${this.queue.length}, Pending=${pendingItems.length}`);
       
-      const item = pendingItems[0]; // Get first pending item
-      if (!item) {
-        console.log('No pending items, waiting...');
+      if (pendingItems.length === 0) {
+        // No pending items, wait a bit before checking again
         await new Promise(resolve => setTimeout(resolve, 1000));
         continue;
       }
 
-      console.log(`Processing next item: ${item.englishWord} (${item.id})`);
+      // Create a batch of workers up to the concurrency limit
+      const batch = pendingItems.slice(0, this.concurrencyLimit);
+      const workers: Promise<void>[] = [];
       
-      // Process one item at a time (sequential processing)
-      await this.processItem(item);
+      console.log(`Processing batch of ${batch.length} items concurrently...`);
       
-      // Small delay between items to avoid overwhelming the API
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Start processing each item in the batch
+      for (const item of batch) {
+        // Mark as processing immediately to prevent duplicate processing
+        item.status = 'processing';
+        console.log(`Starting processing: ${item.englishWord} (${item.id})`);
+        
+        // Create worker promise and add to array
+        workers.push(this.processItem(item));
+      }
+      
+      // Wait for all workers in the batch to complete
+      await Promise.allSettled(workers);
+      
+      // Small delay between batches to act as a rate limiter
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
     this.processing = false;
@@ -108,10 +121,9 @@ class ImageGenerationQueue {
 
   // Process individual item
   private async processItem(item: QueueItem) {
-    while (item.status === 'pending' && item.retries < this.maxRetries) {
+    while (item.retries < this.maxRetries) {
       try {
         console.log(`Processing: ${item.englishWord} (${item.id}) - Attempt ${item.retries + 1}`);
-        item.status = 'processing';
 
         // Create prediction (async) using centralized config
         const prediction = await replicate.predictions.create({
@@ -138,7 +150,7 @@ class ImageGenerationQueue {
         
         if (item.retries < this.maxRetries) {
           console.log(`Retrying ${item.englishWord} (attempt ${item.retries + 1}/${this.maxRetries}) after delay`);
-          item.status = 'pending';
+          // Keep status as 'processing' during retries
           // Add delay before retry (exponential backoff)
           await new Promise(resolve => setTimeout(resolve, 5000 * item.retries));
         } else {
