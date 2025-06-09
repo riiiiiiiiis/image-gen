@@ -149,7 +149,7 @@ export default function DataTable() {
 
   const handleSavePrompt = (id: number) => {
     console.log('Saving prompt:', { id, prompt: editingPrompt });
-    updateEntry(id, { prompt: editingPrompt, promptStatus: 'completed' });
+    updateEntry(id, { prompt: editingPrompt, promptStatus: 'completed', qaScore: null });
     setEditingId(null);
     setEditingPrompt('');
     toast.success('Prompt saved');
@@ -191,6 +191,7 @@ export default function DataTable() {
         updateEntry(result.id, {
           prompt: result.prompt,
           promptStatus: result.prompt === 'Failed to generate prompt' ? 'error' : 'completed',
+          qaScore: null, // Reset QA score on new prompt
         });
       },
       processItemError: (error, originalEntry) => {
@@ -271,7 +272,7 @@ export default function DataTable() {
           entry.prompt.trim() !== '' && 
           entry.imageStatus !== 'queued' && 
           entry.imageStatus !== 'processing' && 
-          (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+          (!entry.imageUrl || entry.imageStatus !== 'completed')
         )
         .slice(0, input);
     } else {
@@ -336,7 +337,7 @@ export default function DataTable() {
       entry.prompt.trim() !== '' && 
       entry.imageStatus !== 'queued' && 
       entry.imageStatus !== 'processing' && 
-      (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+      (!entry.imageUrl || entry.imageStatus !== 'completed')
     );
     
     if (eligibleEntries.length === 0) {
@@ -354,7 +355,7 @@ export default function DataTable() {
       entry.prompt.trim() !== '' && 
       entry.imageStatus !== 'queued' && 
       entry.imageStatus !== 'processing' && 
-      (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+      (!entry.imageUrl || entry.imageStatus !== 'completed')
     );
     
     if (eligibleEntries.length === 0) {
@@ -691,7 +692,7 @@ export default function DataTable() {
             entry.prompt.trim() !== '' && 
             entry.imageStatus !== 'queued' && 
             entry.imageStatus !== 'processing' && 
-            (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+            (!entry.imageUrl || entry.imageStatus !== 'completed')
           ).length}
         />
       </div>
