@@ -87,6 +87,7 @@ All API routes return consistent JSON:
 - Always work on feature branches for changes
 - Only push to main when explicitly requested by the user
 - Ask before any git push operations
+- **NEVER push directly - always create PRs instead**
 
 ## Testing
 
