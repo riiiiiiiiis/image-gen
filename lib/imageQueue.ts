@@ -1,5 +1,6 @@
 import Replicate from 'replicate';
 import { getReplicateModel, createReplicateInput } from './replicateConfig';
+import { languageCardRepository } from './db/repository';
 import { uploadImageToSupabase, ensureEmojiImagesBucket } from './supabaseImageStorage';
 
 if (!process.env.REPLICATE_API_TOKEN) {
@@ -144,6 +145,17 @@ class ImageGenerationQueue {
           console.error(`Max retries reached for ${item.englishWord} (${item.id})`);
           item.status = 'error';
           
+          // Update database on final failure
+          try {
+            await languageCardRepository.update(item.entryId, {
+              imageStatus: 'error',
+              replicateId: item.predictionId,
+            });
+            console.log(`[DB] Successfully updated entry ID ${item.entryId} status to 'error'.`);
+          } catch (dbError) {
+            console.error(`[DB] CRITICAL: Failed to update database to 'error' status for entry ID ${item.entryId}.`, dbError);
+          }
+
           // Notify error
           this.notifyError(item, (error as Error).message || 'Generation failed');
           
@@ -174,11 +186,25 @@ class ImageGenerationQueue {
       
       item.status = 'completed';
       
+      // Update the database with the new image URL and status
+      const generatedAt = new Date().toISOString();
+      try {
+        await languageCardRepository.update(item.entryId, {
+          imageUrl: uploadResult.imageUrl,
+          imageStatus: 'completed',
+          replicateId: item.predictionId,
+          imageGeneratedAt: generatedAt,
+        });
+        console.log(`[DB] Successfully updated entry ID ${item.entryId} with new image.`);
+      } catch (dbError) {
+        console.error(`[DB] CRITICAL: Failed to update database for entry ID ${item.entryId} after successful image generation and upload.`, dbError);
+      }
+
       // Notify completion via callback or event
       this.notifyCompletion(item, {
         imageUrl: uploadResult.imageUrl,
         originalUrl: uploadResult.originalUrl,
-        generatedAt: new Date().toISOString(),
+        generatedAt: generatedAt,
       });
 
       // Remove from queue
