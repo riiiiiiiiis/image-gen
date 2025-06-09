@@ -81,6 +81,13 @@ All API routes return consistent JSON:
 - Success: `{ success: true, data: ... }`
 - Error: `{ success: false, error: "message" }`
 
+## Git Workflow Rules
+
+- **NEVER push to main branch without explicit user permission**
+- Always work on feature branches for changes
+- Only push to main when explicitly requested by the user
+- Ask before any git push operations
+
 ## Testing
 
 No test framework is currently configured. When adding tests, update this section with the test command.
