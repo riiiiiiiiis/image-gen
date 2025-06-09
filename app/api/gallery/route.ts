@@ -33,7 +33,7 @@ async function generateGalleryFromDatabase() {
     const allEntries = await languageCardRepository.findAll();
     const entriesWithImages = allEntries.filter(entry => 
       entry.imageUrl && entry.imageStatus === 'completed'
-    ).slice(0, 1000); // Reasonable limit for gallery
+    ); // Reasonable limit for gallery
     
     const images = entriesWithImages.map((entry: WordEntry) => ({
       id: entry.id,
