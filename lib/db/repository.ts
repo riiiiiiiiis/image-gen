@@ -106,7 +106,8 @@ export class LanguageCardRepository {
     const { data, error } = await supabaseAdmin
       .from('word_entries')
       .select('*')
-      .order('id', { ascending: true });
+      .order('id', { ascending: true })
+      .limit(5000); // Fetch up to 5000 rows to override the default 1000 limit
       
     if (error) throw error;
     
