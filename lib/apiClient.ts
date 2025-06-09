@@ -9,6 +9,7 @@ export interface ApiResponse<T = any> {
 
 // Request payload types
 export interface GeneratePromptPayload {
+  entryId: number;
   english: string;
   russian: string;
   transcription: string;

@@ -36,27 +36,47 @@ Analyze and categorize based on:
 - Concrete/Abstract nature
 - Visual representation potential (HIGH/MEDIUM/LOW)
 - Word type (noun/verb/adjective/adverb/phrase)
-- For polysemous words, identify primary meaning
-- Suggest transformation strategy if abstract
+- Suggest a direct, ready-to-use image prompt if the word is abstract or needs transformation.
 
-Output JSON only, matching this exact structure with valid values:
+Output JSON only, matching this exact structure:
 {
   "primary_category": "CONCRETE-VISUAL" | "ABSTRACT-SYMBOLIC" | "ACTION-VISUAL" | "STATE-METAPHORICAL",
   "image_suitability": "HIGH" | "MEDIUM" | "LOW",
   "word_type": "noun" | "verb" | "adjective" | "adverb" | "phrase",
-  "transformation_needed": boolean, // e.g., true or false
-  "transformation_suggestion": "string", // e.g., "represent 'happiness' with a smiling emoji face" or "" if not needed
-  "confidence": number // 0.0-1.0
+  "transformation_needed": boolean,
+  "transformation_suggestion": "string", // CRITICAL: This MUST be a direct image prompt, NOT an explanation.
+  "confidence": number
 }
 
-Example of a valid JSON output:
+"transformation_suggestion" RULES:
+- If transformation is NOT needed, leave this as an empty string "".
+- If transformation IS needed, provide a concise, direct image prompt (max 4 words).
+- DO NOT use phrases like "Represent with...", "Visualize as...", "Show a...".
+- The suggestion itself should NOT contain the word "emoji". The system adds that context later.
+- The suggestion should be a concrete noun or a person-centric action.
+
+GOOD Example ("happiness"):
 {
-  "primary_category": "ABSTRACT-SYMBOLIC",
-  "image_suitability": "MEDIUM",
-  "word_type": "noun",
-  "transformation_needed": true,
-  "transformation_suggestion": "Visualize as an idea lightbulb",
-  "confidence": 0.85
+  ...
+  "transformation_suggestion": "smiling face" // Correct: no "emoji" word.
+}
+
+BAD Example ("happiness"):
+{
+  ...
+  "transformation_suggestion": "smiling emoji face" // WRONG! Contains the word "emoji".
+}
+
+GOOD Example ("above"):
+{
+  ...
+  "transformation_suggestion": "person pointing up"
+}
+
+BAD Example ("above"):
+{
+  ...
+  "transformation_suggestion": "An image showing a person pointing up" // WRONG! Conversational.
 }`;
 }
 

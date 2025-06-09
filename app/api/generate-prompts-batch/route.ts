@@ -6,6 +6,7 @@ import {
 } from '@/lib/openrouter';
 import { getPromptOverride } from '@/lib/promptOverrides';
 import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
+import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
 export async function POST(request: NextRequest) {
   return handleApiRequest(request, async (_req, body: { entries: BatchPromptEntry[] }) => {
@@ -16,18 +17,51 @@ export async function POST(request: NextRequest) {
 
     const { entries } = body;
 
-    // Check for overrides first and separate entries
-    const overriddenResults: { id: number; prompt: string }[] = [];
+    // Fetch full data for all entries from the database
+    const entryIds = entries.map(e => e.id);
+    const { data: dbEntries, error: dbError } = await supabaseAdmin
+      .from('word_entries')
+      .select('*')
+      .in('id', entryIds);
+
+    if (dbError) {
+      console.error('Failed to fetch entries from database:', dbError);
+      return NextResponse.json({ error: 'Failed to fetch entries from database' }, { status: 500 });
+    }
+
+    // Create a map of DB entries for easy lookup - raw DB rows with snake_case column names
+    interface DBEntry {
+      id: number;
+      categorization_transformation_needed: boolean;
+      categorization_transformation_suggestion: string | null;
+      [key: string]: unknown;
+    }
+    const dbEntriesMap = new Map<number, DBEntry>(dbEntries?.map((entry: DBEntry) => [entry.id, entry]) || []);
+
+    // Check for overrides and DB suggestions, separating entries
+    const finalResults: { id: number; prompt: string }[] = [];
     const entriesToGenerate: BatchPromptEntry[] = [];
 
     for (const entry of entries) {
+      // Priority 1: Check for YAML override
       const override = getPromptOverride(entry.english);
       if (override) {
         console.log(`Using prompt override for "${entry.english}": "${override}"`);
-        overriddenResults.push({ id: entry.id, prompt: override });
-      } else {
-        entriesToGenerate.push(entry);
+        finalResults.push({ id: entry.id, prompt: override });
+        continue;
       }
+
+      // Priority 2: Check for DB transformation suggestion
+      const dbEntry = dbEntriesMap.get(entry.id);
+      if (dbEntry?.categorization_transformation_needed && 
+          dbEntry.categorization_transformation_suggestion?.trim()) {
+        console.log(`Using categorization transformation suggestion for "${entry.english}": "${dbEntry.categorization_transformation_suggestion}"`);
+        finalResults.push({ id: entry.id, prompt: dbEntry.categorization_transformation_suggestion });
+        continue;
+      }
+
+      // Priority 3: Need AI generation
+      entriesToGenerate.push(entry);
     }
 
     let aiGeneratedResults: { id: number; prompt: string }[] = [];
@@ -75,8 +109,8 @@ export async function POST(request: NextRequest) {
       }));
     }
 
-    // Combine overridden and AI-generated results, maintaining original order
-    const allResults = [...overriddenResults, ...aiGeneratedResults];
+    // Combine all results (overrides, DB suggestions, and AI-generated), maintaining original order
+    const allResults = [...finalResults, ...aiGeneratedResults];
     const sortedResults = allResults.sort((a, b) => a.id - b.id);
 
     return NextResponse.json({ prompts: sortedResults });

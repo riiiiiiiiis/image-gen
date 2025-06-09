@@ -97,6 +97,7 @@ export default function DataTable() {
     activityManager.addActivity('loading', `Generating prompt for "${entry.original_text}"`, undefined, operationKey);
     
     const result = await generatePromptService({
+      entryId: entry.id,
       english: entry.original_text,
       russian: entry.translation_text,
       transcription: entry.transcription,
