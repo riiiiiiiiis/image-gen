@@ -51,16 +51,7 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      // Priority 2: Check for DB transformation suggestion
-      const dbEntry = dbEntriesMap.get(entry.id);
-      if (dbEntry?.categorization_transformation_needed && 
-          dbEntry.categorization_transformation_suggestion?.trim()) {
-        console.log(`Using categorization transformation suggestion for "${entry.english}": "${dbEntry.categorization_transformation_suggestion}"`);
-        finalResults.push({ id: entry.id, prompt: dbEntry.categorization_transformation_suggestion });
-        continue;
-      }
-
-      // Priority 3: Need AI generation
+      // Priority 2: Need AI generation (always generate fresh prompts unless YAML override exists)
       entriesToGenerate.push(entry);
     }
 
@@ -109,7 +100,7 @@ export async function POST(request: NextRequest) {
       }));
     }
 
-    // Combine all results (overrides, DB suggestions, and AI-generated), maintaining original order
+    // Combine all results (overrides and AI-generated), maintaining original order
     const allResults = [...finalResults, ...aiGeneratedResults];
     const sortedResults = allResults.sort((a, b) => a.id - b.id);
 
