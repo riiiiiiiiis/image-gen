@@ -3,10 +3,11 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { WordEntry } from '@/types';
-import { RefreshCw, Download } from 'lucide-react';
+import { RefreshCw, Download, RefreshCcw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { activityManager } from './ActivityLog';
-import { queueImageService } from '@/lib/apiClient';
+import { queueImageService, generatePromptsBatchService } from '@/lib/apiClient';
+import { processBatch } from '@/lib/batchUtils';
 
 export default function Gallery() {
   const { entries, updateEntry } = useAppStore();
@@ -149,6 +150,59 @@ export default function Gallery() {
     }
   };
 
+  const handleBatchRefreshBadPrompts = async () => {
+    // Filter entries with bad QA score - use all entries, not just filtered gallery images
+    const badEntries = entries.filter(entry => entry.qaScore === 'bad');
+    
+    if (badEntries.length === 0) {
+      toast.error('No bad entries found');
+      return;
+    }
+
+    activityManager.addActivity('info', `Starting batch refresh for ${badEntries.length} bad entries...`);
+
+    const result = await processBatch({
+      itemsToProcess: badEntries,
+      batchSize: badEntries.length, // Process all at once for prompts
+      delayBetweenBatchesMs: 0,
+      operationName: 'Batch Refresh Bad Prompts',
+      getBatchPayload: (batch) => ({
+        entries: batch.map(entry => ({
+          id: entry.id,
+          english: entry.original_text,
+          russian: entry.translation_text,
+          transcription: entry.transcription,
+        })),
+      }),
+      batchApiService: generatePromptsBatchService,
+      getSuccessItems: (responseData, batchItems) => responseData.prompts || [],
+      getErrorItems: (responseData) => [], // generatePromptsBatchService doesn't return separate errors array
+      processItemSuccess: (result, originalEntry) => {
+        updateEntry(result.id, {
+          prompt: result.prompt,
+          promptStatus: result.prompt === 'Failed to generate prompt' ? 'error' : 'completed',
+          qaScore: null,          // Reset QA score
+          imageUrl: null,         // Remove old image URL
+          imageStatus: 'none'     // Reset image status for new generation
+        });
+        activityManager.addActivity('success', `Refreshed prompt for "${originalEntry.original_text}"`);
+      },
+      processItemError: (error, originalEntry) => {
+        if (originalEntry) {
+          updateEntry(originalEntry.id, { promptStatus: 'error' });
+          activityManager.addActivity('error', `Failed to refresh prompt for "${originalEntry.original_text}"`);
+        }
+      },
+      onStartProcessingItem: (entry) => {
+        updateEntry(entry.id, { promptStatus: 'generating' });
+      },
+    });
+
+    const message = `Refreshed ${result.totalSuccess} prompts. ${result.totalFailed > 0 ? `${result.totalFailed} failed.` : ''}`;
+    activityManager.addActivity('info', message);
+    toast.success(message);
+  };
+
   if (allImages.length === 0) {
     return (
       <div className="text-center py-12">
@@ -181,10 +235,24 @@ export default function Gallery() {
           </span>
         </div>
         
-        <button onClick={handleExportAll} className="btn-primary">
-          <Download className="h-4 w-4" />
-          [EXPORT]
-        </button>
+        <div className="flex gap-2">
+          {/* Show refresh button when there are bad entries */}
+          {entries.filter(entry => entry.qaScore === 'bad').length > 0 && (
+            <button
+              onClick={handleBatchRefreshBadPrompts}
+              className="btn-secondary flex items-center gap-2"
+              title="Generate new prompts for all bad entries"
+            >
+              <RefreshCcw className="h-4 w-4" />
+              Refresh Bad ({entries.filter(entry => entry.qaScore === 'bad').length})
+            </button>
+          )}
+          
+          <button onClick={handleExportAll} className="btn-primary">
+            <Download className="h-4 w-4" />
+            [EXPORT]
+          </button>
+        </div>
       </div>
 
       {/* Gallery Grid */}

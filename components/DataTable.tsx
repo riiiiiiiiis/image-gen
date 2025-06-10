@@ -12,7 +12,7 @@ import {
 } from '@tanstack/react-table';
 import { useAppStore } from '@/store/useAppStore';
 import { WordEntry } from '@/types';
-import { ChevronUp, ChevronDown, Search, Filter, Sparkles, ImageIcon, Edit2, Save, X } from 'lucide-react';
+import { ChevronUp, ChevronDown, Search, Filter, Sparkles, ImageIcon, Edit2, Save, X, RefreshCcw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { activityManager } from './ActivityLog';
 import { BatchActionMenu } from './BatchActionMenu';
@@ -365,6 +365,59 @@ export default function DataTable() {
     await startBatchImageGeneration(eligibleEntries);
   };
 
+  const handleBatchRefreshBadPrompts = async () => {
+    // Filter entries with bad QA score
+    const badEntries = filteredData.filter(entry => entry.qaScore === 'bad');
+    
+    if (badEntries.length === 0) {
+      toast.error('No bad entries found');
+      return;
+    }
+
+    activityManager.addActivity('info', `Starting batch refresh for ${badEntries.length} bad entries...`);
+
+    const result = await processBatch({
+      itemsToProcess: badEntries,
+      batchSize: badEntries.length, // Process all at once for prompts
+      delayBetweenBatchesMs: 0,
+      operationName: 'Batch Refresh Bad Prompts',
+      getBatchPayload: (batch) => ({
+        entries: batch.map(entry => ({
+          id: entry.id,
+          english: entry.original_text,
+          russian: entry.translation_text,
+          transcription: entry.transcription,
+        })),
+      }),
+      batchApiService: generatePromptsBatchService,
+      getSuccessItems: (responseData, batchItems) => responseData.prompts || [],
+      getErrorItems: (responseData) => [], // generatePromptsBatchService doesn't return separate errors array
+      processItemSuccess: (result, originalEntry) => {
+        updateEntry(result.id, {
+          prompt: result.prompt,
+          promptStatus: result.prompt === 'Failed to generate prompt' ? 'error' : 'completed',
+          qaScore: null,          // Reset QA score
+          imageUrl: null,         // Remove old image URL
+          imageStatus: 'none'     // Reset image status for new generation
+        });
+        activityManager.addActivity('success', `Refreshed prompt for "${originalEntry.original_text}"`);
+      },
+      processItemError: (error, originalEntry) => {
+        if (originalEntry) {
+          updateEntry(originalEntry.id, { promptStatus: 'error' });
+          activityManager.addActivity('error', `Failed to refresh prompt for "${originalEntry.original_text}"`);
+        }
+      },
+      onStartProcessingItem: (entry) => {
+        updateEntry(entry.id, { promptStatus: 'generating' });
+      },
+    });
+
+    const message = `Refreshed ${result.totalSuccess} prompts. ${result.totalFailed > 0 ? `${result.totalFailed} failed.` : ''}`;
+    activityManager.addActivity('info', message);
+    toast.success(message);
+  };
+
   const columns = useMemo<ColumnDef<WordEntry>[]>(
     () => [
       {
@@ -694,6 +747,17 @@ export default function DataTable() {
             (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
           ).length}
         />
+
+        {/* Refresh Bad Prompts Button */}
+        <button
+          onClick={handleBatchRefreshBadPrompts}
+          disabled={filteredData.filter(entry => entry.qaScore === 'bad').length === 0}
+          className="btn-secondary flex items-center gap-2"
+          title="Generate new prompts for all bad entries"
+        >
+          <RefreshCcw className="h-4 w-4" />
+          Refresh Bad Prompts ({filteredData.filter(entry => entry.qaScore === 'bad').length})
+        </button>
       </div>
 
       {/* Table */}
