@@ -6,7 +6,6 @@ import {
 } from '@/lib/openrouter';
 import { getPromptOverride } from '@/lib/promptOverrides';
 import { handleApiRequest, validateRequestArray } from '@/lib/apiUtils';
-import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
 export async function POST(request: NextRequest) {
   return handleApiRequest(request, async (_req, body: { entries: BatchPromptEntry[] }) => {
@@ -17,28 +16,7 @@ export async function POST(request: NextRequest) {
 
     const { entries } = body;
 
-    // Fetch full data for all entries from the database
-    const entryIds = entries.map(e => e.id);
-    const { data: dbEntries, error: dbError } = await supabaseAdmin
-      .from('word_entries')
-      .select('*')
-      .in('id', entryIds);
-
-    if (dbError) {
-      console.error('Failed to fetch entries from database:', dbError);
-      return NextResponse.json({ error: 'Failed to fetch entries from database' }, { status: 500 });
-    }
-
-    // Create a map of DB entries for easy lookup - raw DB rows with snake_case column names
-    interface DBEntry {
-      id: number;
-      categorization_transformation_needed: boolean;
-      categorization_transformation_suggestion: string | null;
-      [key: string]: unknown;
-    }
-    const dbEntriesMap = new Map<number, DBEntry>(dbEntries?.map((entry: DBEntry) => [entry.id, entry]) || []);
-
-    // Check for overrides and DB suggestions, separating entries
+    // Check for overrides, separating entries
     const finalResults: { id: number; prompt: string }[] = [];
     const entriesToGenerate: BatchPromptEntry[] = [];
 
