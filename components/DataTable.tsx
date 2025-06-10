@@ -418,6 +418,76 @@ export default function DataTable() {
     toast.success(message);
   };
 
+  const handleCleanupDescriptivePrompts = async () => {
+    activityManager.addActivity('info', 'Searching for descriptive prompts to clean up...');
+    
+    const allEntries = useAppStore.getState().entries;
+    
+    const junkKeywords = ['represent', 'visualize', 'show a', 'e.g.', 'could be', 'by showing', 'depict', 'as a'];
+
+    const entriesToClean = allEntries.filter(entry => {
+        // SAFETY PROTOCOL: First and most important check.
+        // If the user marked it as 'good', we NEVER touch it.
+        if (entry.qaScore === 'good') {
+            return false;
+        }
+
+        const prompt = entry.prompt?.toLowerCase() || '';
+        if (!prompt) return false;
+        
+        // Criteria for a bad prompt: contains junk keywords or is abnormally long.
+        return prompt.length > 50 || junkKeywords.some(keyword => prompt.includes(keyword));
+    });
+
+    if (entriesToClean.length === 0) {
+        toast.info('No actionable descriptive prompts found to clean up.');
+        activityManager.addActivity('info', 'Cleanup not needed. No unapproved descriptive prompts found.');
+        return;
+    }
+
+    activityManager.addActivity('info', `Found ${entriesToClean.length} prompts to clean. Starting process...`);
+
+    const result = await processBatch({
+        itemsToProcess: entriesToClean,
+        batchSize: 20,
+        delayBetweenBatchesMs: 200,
+        operationName: 'Descriptive Prompts Cleanup',
+        getBatchPayload: (batch) => ({
+            entries: batch.map(e => ({
+                id: e.id,
+                english: e.original_text,
+                russian: e.translation_text,
+                transcription: e.transcription,
+            })),
+        }),
+        batchApiService: generatePromptsBatchService,
+        getSuccessItems: (data) => data.prompts || [],
+        getErrorItems: (data) => data.errors || [],
+        onStartProcessingItem: (entry) => {
+            updateEntry(entry.id, { promptStatus: 'generating' });
+        },
+        processItemSuccess: (result, originalEntry) => {
+            // Update the entry according to the safety protocol.
+            // DO NOT modify imageUrl.
+            updateEntry(result.id, {
+                prompt: result.prompt,
+                promptStatus: 'completed',
+                qaScore: null,
+                imageStatus: 'none', 
+            });
+        },
+        processItemError: (error, originalEntry) => {
+            if (originalEntry) {
+                updateEntry(originalEntry.id, { promptStatus: 'error' });
+            }
+        },
+    });
+
+    const message = `Cleaned up ${result.totalSuccess} descriptive prompts. ${result.totalFailed > 0 ? `${result.totalFailed} failed.` : ''}`;
+    activityManager.addActivity('info', message);
+    toast.success(message);
+  };
+
   const columns = useMemo<ColumnDef<WordEntry>[]>(
     () => [
       {
@@ -757,6 +827,16 @@ export default function DataTable() {
         >
           <RefreshCcw className="h-4 w-4" />
           Refresh Bad Prompts ({filteredData.filter(entry => entry.qaScore === 'bad').length})
+        </button>
+
+        {/* Cleanup Descriptive Prompts Button */}
+        <button
+          onClick={handleCleanupDescriptivePrompts}
+          className="btn-primary bg-orange-600 hover:bg-orange-700 flex items-center gap-2"
+          title="Find and regenerate all unapproved prompts that are descriptive sentences instead of objects."
+        >
+          <Sparkles className="h-4 w-4" />
+          Cleanup Descriptive Prompts
         </button>
       </div>
 
