@@ -271,7 +271,7 @@ export default function DataTable() {
           entry.prompt.trim() !== '' && 
           entry.imageStatus !== 'queued' && 
           entry.imageStatus !== 'processing' && 
-          (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+          (!entry.imageUrl || entry.imageStatus !== 'completed') && !entry.qaScore
         )
         .slice(0, input);
     } else {
@@ -336,7 +336,7 @@ export default function DataTable() {
       entry.prompt.trim() !== '' && 
       entry.imageStatus !== 'queued' && 
       entry.imageStatus !== 'processing' && 
-      (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+      (!entry.imageUrl || entry.imageStatus !== 'completed') && !entry.qaScore
     );
     
     if (eligibleEntries.length === 0) {
@@ -354,7 +354,7 @@ export default function DataTable() {
       entry.prompt.trim() !== '' && 
       entry.imageStatus !== 'queued' && 
       entry.imageStatus !== 'processing' && 
-      (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+      (!entry.imageUrl || entry.imageStatus !== 'completed') && !entry.qaScore
     );
     
     if (eligibleEntries.length === 0) {
@@ -814,7 +814,7 @@ export default function DataTable() {
             entry.prompt.trim() !== '' && 
             entry.imageStatus !== 'queued' && 
             entry.imageStatus !== 'processing' && 
-            (!entry.imageUrl || entry.imageStatus !== 'completed' || entry.qaScore === 'bad')
+            (!entry.imageUrl || entry.imageStatus !== 'completed') && !entry.qaScore
           ).length}
         />
 
