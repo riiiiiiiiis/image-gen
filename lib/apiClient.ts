@@ -214,3 +214,9 @@ export async function batchGenerateImagesService(
     body: payload,
   });
 }
+
+export async function clearQueueService(): Promise<ApiResponse<{ clearedCount: number }>> {
+  return apiCall<{ clearedCount: number }>('/api/clear-queue', {
+    method: 'POST',
+  });
+}

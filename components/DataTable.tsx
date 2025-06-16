@@ -22,6 +22,7 @@ import {
   generatePromptsBatchService,
   categorizeVocabularyService,
   batchGenerateImagesService,
+  clearQueueService,
 } from '@/lib/apiClient';
 import { processBatch } from '@/lib/batchUtils';
 
@@ -455,6 +456,29 @@ export default function DataTable() {
     toast.success(message);
   };
 
+  const handleClearQueue = async () => {
+    if (!confirm('Are you sure you want to clear the entire image generation queue? This will remove all pending and processing items.')) {
+      return;
+    }
+
+    try {
+      activityManager.addActivity('info', 'Clearing image generation queue...');
+      const result = await clearQueueService();
+      
+      if (result.data) {
+        activityManager.addActivity('success', `Cleared ${result.data.clearedCount} items from the queue`);
+        toast.success(`Cleared ${result.data.clearedCount} items from the queue`);
+      } else {
+        activityManager.addActivity('error', `Failed to clear queue: ${result.error}`);
+        toast.error(`Failed to clear queue: ${result.error}`);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      activityManager.addActivity('error', `Error clearing queue: ${errorMessage}`);
+      toast.error(`Error clearing queue: ${errorMessage}`);
+    }
+  };
+
   const handleCleanupDescriptivePrompts = async () => {
     activityManager.addActivity('info', 'Searching for descriptive prompts to clean up...');
     
@@ -875,6 +899,16 @@ export default function DataTable() {
         >
           <ImageIcon className="h-4 w-4" />
           Regen Bad Images ({filteredData.filter(entry => entry.qaScore === 'bad').length})
+        </button>
+
+        {/* Clear Queue Button */}
+        <button
+          onClick={handleClearQueue}
+          className="btn-secondary bg-red-600 hover:bg-red-700 text-white flex items-center gap-2"
+          title="Clear all items from the image generation queue"
+        >
+          <X className="h-4 w-4" />
+          Clear Queue
         </button>
 
         {/* Cleanup Descriptive Prompts Button */}

@@ -296,6 +296,15 @@ class ImageGenerationQueue {
     }));
   }
 
+  // Clear the entire queue
+  clearQueue() {
+    const clearedCount = this.queue.length;
+    this.queue = [];
+    this.processing = false;
+    console.log(`Cleared ${clearedCount} items from image generation queue`);
+    return clearedCount;
+  }
+
   // Callback methods (to be overridden)
   protected notifyCompletion(item: QueueItem, _result: NotifyCompletionResult) {
     // Override this method to handle completion
