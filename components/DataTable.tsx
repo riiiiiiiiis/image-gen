@@ -369,7 +369,9 @@ export default function DataTable() {
     // Get all entries from the store to ensure we find all bad entries, not just filtered ones.
     const allEntries = useAppStore.getState().entries;
     const badEntriesWithPrompts = allEntries.filter(
-      entry => entry.qaScore === 'bad' && entry.prompt && entry.prompt.trim() !== ''
+      entry => entry.qaScore === 'bad' && 
+      entry.prompt && 
+      entry.prompt.trim() !== ''
     );
 
     if (badEntriesWithPrompts.length === 0) {
@@ -379,8 +381,25 @@ export default function DataTable() {
 
     activityManager.addActivity('info', `Starting image regeneration for ${badEntriesWithPrompts.length} bad entries...`);
 
-    // Use the existing batch image generation logic
-    await startBatchImageGeneration(badEntriesWithPrompts);
+    // Process in chunks to avoid overwhelming the system
+    const CHUNK_SIZE = 500;
+    let processed = 0;
+    
+    while (processed < badEntriesWithPrompts.length) {
+      const chunk = badEntriesWithPrompts.slice(processed, processed + CHUNK_SIZE);
+      activityManager.addActivity('info', `Queueing batch ${Math.floor(processed / CHUNK_SIZE) + 1} (${chunk.length} images)...`);
+      
+      await startBatchImageGeneration(chunk);
+      processed += chunk.length;
+      
+      // Add a small delay between chunks
+      if (processed < badEntriesWithPrompts.length) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+    
+    activityManager.addActivity('success', `All ${badEntriesWithPrompts.length} bad images have been queued for regeneration!`);
+    toast.success(`Queued all ${badEntriesWithPrompts.length} bad images for regeneration!`);
   };
 
   const handleBatchRefreshBadPrompts = async () => {
