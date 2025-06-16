@@ -365,6 +365,24 @@ export default function DataTable() {
     await startBatchImageGeneration(eligibleEntries);
   };
 
+  const handleBatchRegenerateBadImages = async () => {
+    // Get all entries from the store to ensure we find all bad entries, not just filtered ones.
+    const allEntries = useAppStore.getState().entries;
+    const badEntriesWithPrompts = allEntries.filter(
+      entry => entry.qaScore === 'bad' && entry.prompt && entry.prompt.trim() !== ''
+    );
+
+    if (badEntriesWithPrompts.length === 0) {
+      toast.error('No "bad" entries with prompts found to regenerate.');
+      return;
+    }
+
+    activityManager.addActivity('info', `Starting image regeneration for ${badEntriesWithPrompts.length} bad entries...`);
+
+    // Use the existing batch image generation logic
+    await startBatchImageGeneration(badEntriesWithPrompts);
+  };
+
   const handleBatchRefreshBadPrompts = async () => {
     // Filter entries with bad QA score
     const badEntries = filteredData.filter(entry => entry.qaScore === 'bad');
@@ -827,6 +845,17 @@ export default function DataTable() {
         >
           <RefreshCcw className="h-4 w-4" />
           Refresh Bad Prompts ({filteredData.filter(entry => entry.qaScore === 'bad').length})
+        </button>
+
+        {/* Regenerate Bad Images Button */}
+        <button
+          onClick={handleBatchRegenerateBadImages}
+          disabled={filteredData.filter(entry => entry.qaScore === 'bad').length === 0}
+          className="btn-secondary bg-purple-600 hover:bg-purple-700 text-white flex items-center gap-2"
+          title="Regenerate images for all bad entries using their existing prompts"
+        >
+          <ImageIcon className="h-4 w-4" />
+          Regen Bad Images ({filteredData.filter(entry => entry.qaScore === 'bad').length})
         </button>
 
         {/* Cleanup Descriptive Prompts Button */}

@@ -189,12 +189,22 @@ class ImageGenerationQueue {
       // Update the database with the new image URL and status
       const generatedAt = new Date().toISOString();
       try {
-        await languageCardRepository.update(item.entryId, {
+        // First, get the current entry to check if it had a bad QA score
+        const currentEntry = await languageCardRepository.findById(item.entryId);
+        const updateData = {
           imageUrl: uploadResult.imageUrl,
-          imageStatus: 'completed',
+          imageStatus: 'completed' as const,
           replicateId: item.predictionId,
           imageGeneratedAt: generatedAt,
-        });
+          ...(currentEntry && currentEntry.qaScore === 'bad' ? { qaScore: null } : {})
+        };
+        
+        // If this entry had a bad QA score, reset it to null so it can be re-evaluated
+        if (currentEntry && currentEntry.qaScore === 'bad') {
+          console.log(`[DB] Resetting QA score for entry ID ${item.entryId} (was 'bad')`);
+        }
+        
+        await languageCardRepository.update(item.entryId, updateData);
         console.log(`[DB] Successfully updated entry ID ${item.entryId} with new image.`);
       } catch (dbError) {
         console.error(`[DB] CRITICAL: Failed to update database for entry ID ${item.entryId} after successful image generation and upload.`, dbError);
