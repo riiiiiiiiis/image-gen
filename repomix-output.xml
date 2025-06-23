@@ -46,6 +46,8 @@ app/
   api/
     categorize-vocabulary/
       route.ts
+    clear-queue/
+      route.ts
     gallery/
       route.ts
     generate-image/
@@ -108,7 +110,10 @@ lib/
   supabaseImageStorage.ts
   vercelBlobUpload.ts
 scripts/
+  download-failed-images.js
+  export-all-images-by-qa.js
   export-good-images.js
+  export-non-good-images.js
 store/
   useAppStore.ts
 supabase/
@@ -152,7 +157,119 @@ This section contains the contents of the repository's files.
 }
 </file>
 
-<file path="scripts/export-good-images.js">
+<file path="scripts/download-failed-images.js">
+#!/usr/bin/env node
+
+const { createClient } = require('@supabase/supabase-js');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const http = require('http');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env.local') });
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error('❌ Missing Supabase environment variables');
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+});
+
+const OUTPUT_DIR = path.join(__dirname, '..', 'good-images-export');
+const IMAGES_DIR = path.join(OUTPUT_DIR, 'images');
+
+// Failed image IDs
+const FAILED_IDS = [8846, 8012, 8428, 8020, 8499];
+
+function downloadImage(url, filepath) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https:') ? https : http;
+    
+    const request = client.get(url, (response) => {
+      if (response.statusCode === 200) {
+        const fileStream = fs.createWriteStream(filepath);
+        response.pipe(fileStream);
+        
+        fileStream.on('finish', () => {
+          fileStream.close();
+          resolve();
+        });
+        
+        fileStream.on('error', (err) => {
+          fs.unlink(filepath, () => {});
+          reject(err);
+        });
+      } else {
+        reject(new Error(`Failed to download image. Status code: ${response.statusCode}`));
+      }
+    });
+    
+    request.on('error', (err) => {
+      reject(err);
+    });
+    
+    // Increase timeout to 60 seconds for these problematic images
+    request.setTimeout(60000, () => {
+      request.abort();
+      reject(new Error('Download timeout'));
+    });
+  });
+}
+
+async function main() {
+  console.log('🚀 Downloading failed images...');
+  console.log(`📋 IDs to download: ${FAILED_IDS.join(', ')}`);
+  
+  // Query database for these specific images
+  const { data: entries, error } = await supabase
+    .from('word_entries')
+    .select('id, original_text, translation_text, image_url')
+    .in('id', FAILED_IDS);
+  
+  if (error) {
+    console.error('❌ Database query failed:', error);
+    process.exit(1);
+  }
+  
+  if (!entries || entries.length === 0) {
+    console.log('ℹ️ No entries found for these IDs');
+    return;
+  }
+  
+  console.log(`📊 Found ${entries.length} entries in database`);
+  
+  // Download each image
+  for (const entry of entries) {
+    const filename = `${entry.id}.png`;
+    const filepath = path.join(IMAGES_DIR, filename);
+    
+    console.log(`⬇️ Downloading ${filename}...`);
+    
+    try {
+      await downloadImage(entry.image_url, filepath);
+      console.log(`✅ Successfully downloaded ${filename}`);
+    } catch (error) {
+      console.error(`❌ Failed to download ${filename}: ${error.message}`);
+    }
+  }
+  
+  console.log('\n🎉 Finished!');
+}
+
+main().catch((error) => {
+  console.error('💥 Unexpected error:', error);
+  process.exit(1);
+});
+</file>
+
+<file path="scripts/export-all-images-by-qa.js">
 #!/usr/bin/env node
 
 const { createClient } = require('@supabase/supabase-js');
@@ -178,7 +295,227 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey, {
   }
 });
 
-const OUTPUT_DIR = path.join(__dirname, '..', 'good-images-export');
+const OUTPUT_DIR = path.join(__dirname, '..', 'images-export-by-qa');
+
+function createDirectories() {
+  // Create main output directory
+  if (!fs.existsSync(OUTPUT_DIR)) {
+    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  }
+  
+  // Create subdirectories for each qa_score
+  const subdirs = ['good', 'bad', 'unrated'];
+  subdirs.forEach(subdir => {
+    const dirPath = path.join(OUTPUT_DIR, subdir);
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+  });
+}
+
+function getQAFolder(qa_score) {
+  if (qa_score === 'good') return 'good';
+  if (qa_score === 'bad') return 'bad';
+  return 'unrated'; // null or undefined qa_score
+}
+
+function downloadImage(url, filepath) {
+  return new Promise((resolve, reject) => {
+    // Skip if file already exists
+    if (fs.existsSync(filepath)) {
+      resolve({ skipped: true });
+      return;
+    }
+    
+    const client = url.startsWith('https:') ? https : http;
+    
+    const request = client.get(url, (response) => {
+      if (response.statusCode === 200) {
+        const fileStream = fs.createWriteStream(filepath);
+        response.pipe(fileStream);
+        
+        fileStream.on('finish', () => {
+          fileStream.close();
+          resolve({ skipped: false });
+        });
+        
+        fileStream.on('error', (err) => {
+          fs.unlink(filepath, () => {}); // Delete the file on error
+          reject(err);
+        });
+      } else {
+        reject(new Error(`Failed to download image. Status code: ${response.statusCode}`));
+      }
+    });
+    
+    request.on('error', (err) => {
+      reject(err);
+    });
+    
+    request.setTimeout(30000, () => {
+      request.abort();
+      reject(new Error('Download timeout'));
+    });
+  });
+}
+
+
+async function downloadWithConcurrency(downloadTasks, concurrency = 5) {
+  const results = [];
+  let index = 0;
+  let skippedCount = 0;
+  
+  async function downloadNext() {
+    if (index >= downloadTasks.length) return;
+    
+    const currentIndex = index++;
+    const task = downloadTasks[currentIndex];
+    
+    try {
+      const result = await downloadImage(task.url, task.filepath);
+      if (result.skipped) {
+        skippedCount++;
+        console.log(`⏭️  Skipped ${currentIndex + 1}/${downloadTasks.length}: ${task.filename} (already exists)`);
+      } else {
+        console.log(`✅ Downloaded ${currentIndex + 1}/${downloadTasks.length}: ${task.filename} → ${task.folder}/`);
+      }
+      results.push({ success: true, task, skipped: result.skipped });
+    } catch (error) {
+      console.error(`❌ Failed ${currentIndex + 1}/${downloadTasks.length}: ${task.filename} - ${error.message}`);
+      results.push({ success: false, task, error });
+    }
+    
+    // Download next task
+    await downloadNext();
+  }
+  
+  // Start concurrent downloads
+  const workers = Array(Math.min(concurrency, downloadTasks.length))
+    .fill()
+    .map(() => downloadNext());
+  
+  await Promise.all(workers);
+  return { results, skippedCount };
+}
+
+async function main() {
+  console.log('🚀 Starting export of all images organized by QA score...');
+  
+  // Create output directories
+  createDirectories();
+  console.log(`📁 Created output directory: ${OUTPUT_DIR}`);
+  console.log('📂 Subdirectories: good/, bad/, unrated/');
+  
+  // Query database for all images
+  console.log('🔍 Querying database for all images...');
+  const { data: entries, error } = await supabase
+    .from('word_entries')
+    .select('id, original_text, translation_text, image_url, qa_score')
+    .not('image_url', 'is', null)
+    .limit(5000);
+  
+  if (error) {
+    console.error('❌ Database query failed:', error);
+    process.exit(1);
+  }
+  
+  if (!entries || entries.length === 0) {
+    console.log('ℹ️ No images found in database');
+    return;
+  }
+  
+  console.log(`📊 Found ${entries.length} total images to export`);
+  
+  // Count by qa_score
+  const scoreCounts = entries.reduce((acc, entry) => {
+    const score = entry.qa_score || 'unrated';
+    acc[score] = (acc[score] || 0) + 1;
+    return acc;
+  }, {});
+  
+  console.log('📈 Breakdown by qa_score:');
+  Object.entries(scoreCounts).forEach(([score, count]) => {
+    console.log(`   ${score}: ${count}`);
+  });
+  
+  // Prepare download tasks
+  const downloadTasks = entries.map((entry) => {
+    const folder = getQAFolder(entry.qa_score);
+    const filename = `${entry.id}.png`;
+    const filepath = path.join(OUTPUT_DIR, folder, filename);
+    
+    return {
+      id: entry.id,
+      url: entry.image_url,
+      filename,
+      filepath,
+      folder,
+      original: entry.original_text,
+      translation: entry.translation_text,
+      qa_score: entry.qa_score
+    };
+  });
+  
+  // Start downloads
+  console.log('⬇️ Starting downloads (5 concurrent)...');
+  const { results, skippedCount } = await downloadWithConcurrency(downloadTasks, 5);
+  
+  // Summary
+  const successful = results.filter(r => r.success && !r.skipped).length;
+  const failed = results.filter(r => !r.success).length;
+  
+  console.log('\n📈 Export Summary:');
+  console.log(`✅ Successful downloads: ${successful}`);
+  console.log(`⏭️  Skipped (already exist): ${skippedCount}`);
+  console.log(`❌ Failed: ${failed}`);
+  console.log(`📁 Images saved to: ${OUTPUT_DIR}`);
+  console.log('   └── good/    (good quality images)');
+  console.log('   └── bad/     (bad quality images)');
+  console.log('   └── unrated/ (unrated images)');
+  
+  if (failed > 0) {
+    console.log('\n❌ Failed downloads:');
+    results
+      .filter(r => !r.success)
+      .forEach(r => console.log(`   ${r.task.filename}: ${r.error.message}`));
+  }
+  
+  console.log('\n🎉 Export completed!');
+}
+
+main().catch((error) => {
+  console.error('💥 Unexpected error:', error);
+  process.exit(1);
+});
+</file>
+
+<file path="scripts/export-non-good-images.js">
+#!/usr/bin/env node
+
+const { createClient } = require('@supabase/supabase-js');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const http = require('http');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env.local') });
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error('❌ Missing Supabase environment variables');
+  console.error('Make sure NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set in .env.local');
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+});
+
+const OUTPUT_DIR = path.join(__dirname, '..', 'non-good-images-export');
 const IMAGES_DIR = path.join(OUTPUT_DIR, 'images');
 
 function createDirectories() {
@@ -237,7 +574,7 @@ async function downloadWithConcurrency(downloadTasks, concurrency = 5) {
     
     try {
       await downloadImage(task.url, task.filepath);
-      console.log(`✅ Downloaded ${currentIndex + 1}/${downloadTasks.length}: ${task.filename}`);
+      console.log(`✅ Downloaded ${currentIndex + 1}/${downloadTasks.length}: ${task.filename} (${task.qa_score || 'unrated'})`);
       results.push({ success: true, task });
     } catch (error) {
       console.error(`❌ Failed ${currentIndex + 1}/${downloadTasks.length}: ${task.filename} - ${error.message}`);
@@ -258,19 +595,20 @@ async function downloadWithConcurrency(downloadTasks, concurrency = 5) {
 }
 
 async function main() {
-  console.log('🚀 Starting export of good images...');
+  console.log('🚀 Starting export of non-good images...');
   
   // Create output directories
   createDirectories();
   console.log(`📁 Created output directory: ${OUTPUT_DIR}`);
   
-  // Query database for good images
-  console.log('🔍 Querying database for good images...');
+  // Query database for non-good images (including unrated)
+  console.log('🔍 Querying database for non-good images (including unrated)...');
   const { data: entries, error } = await supabase
     .from('word_entries')
-    .select('id, original_text, translation_text, image_url')
-    .eq('qa_score', 'good')
-    .not('image_url', 'is', null);
+    .select('id, original_text, translation_text, image_url, qa_score')
+    .or('qa_score.neq.good,qa_score.is.null')
+    .not('image_url', 'is', null)
+    .limit(5000);
   
   if (error) {
     console.error('❌ Database query failed:', error);
@@ -278,11 +616,23 @@ async function main() {
   }
   
   if (!entries || entries.length === 0) {
-    console.log('ℹ️ No good images found in database');
+    console.log('ℹ️ No non-good images found in database');
     return;
   }
   
-  console.log(`📊 Found ${entries.length} good images to export`);
+  console.log(`📊 Found ${entries.length} non-good images to export`);
+  
+  // Count by qa_score
+  const scoreCounts = entries.reduce((acc, entry) => {
+    const score = entry.qa_score || 'unrated';
+    acc[score] = (acc[score] || 0) + 1;
+    return acc;
+  }, {});
+  
+  console.log('📈 Breakdown by qa_score:');
+  Object.entries(scoreCounts).forEach(([score, count]) => {
+    console.log(`   ${score}: ${count}`);
+  });
   
   // Prepare download tasks
   const downloadTasks = entries.map((entry) => {
@@ -295,7 +645,8 @@ async function main() {
       filename,
       filepath,
       original: entry.original_text,
-      translation: entry.translation_text
+      translation: entry.translation_text,
+      qa_score: entry.qa_score
     };
   });
   
@@ -326,6 +677,24 @@ main().catch((error) => {
   console.error('💥 Unexpected error:', error);
   process.exit(1);
 });
+</file>
+
+<file path="app/api/clear-queue/route.ts">
+import { NextRequest, NextResponse } from 'next/server';
+import { imageQueue } from '@/lib/imageQueue';
+import { handleApiRequest } from '@/lib/apiUtils';
+
+export async function POST(request: NextRequest) {
+  return handleApiRequest(request, async () => {
+    const clearedCount = imageQueue.clearQueue();
+    
+    return NextResponse.json({
+      success: true,
+      message: `Cleared ${clearedCount} items from the image generation queue`,
+      clearedCount
+    });
+  });
+}
 </file>
 
 <file path="app/api/upload/route.ts">
@@ -1207,6 +1576,182 @@ export async function uploadBufferToBlob(fileName: string, fileBuffer: Buffer, c
 }
 </file>
 
+<file path="scripts/export-good-images.js">
+#!/usr/bin/env node
+
+const { createClient } = require('@supabase/supabase-js');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const http = require('http');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env.local') });
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error('❌ Missing Supabase environment variables');
+  console.error('Make sure NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set in .env.local');
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+});
+
+const OUTPUT_DIR = path.join(__dirname, '..', 'good-images-export');
+const IMAGES_DIR = path.join(OUTPUT_DIR, 'images');
+
+function createDirectories() {
+  if (!fs.existsSync(OUTPUT_DIR)) {
+    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(IMAGES_DIR)) {
+    fs.mkdirSync(IMAGES_DIR, { recursive: true });
+  }
+}
+
+function downloadImage(url, filepath) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https:') ? https : http;
+    
+    const request = client.get(url, (response) => {
+      if (response.statusCode === 200) {
+        const fileStream = fs.createWriteStream(filepath);
+        response.pipe(fileStream);
+        
+        fileStream.on('finish', () => {
+          fileStream.close();
+          resolve();
+        });
+        
+        fileStream.on('error', (err) => {
+          fs.unlink(filepath, () => {}); // Delete the file on error
+          reject(err);
+        });
+      } else {
+        reject(new Error(`Failed to download image. Status code: ${response.statusCode}`));
+      }
+    });
+    
+    request.on('error', (err) => {
+      reject(err);
+    });
+    
+    request.setTimeout(30000, () => {
+      request.abort();
+      reject(new Error('Download timeout'));
+    });
+  });
+}
+
+
+async function downloadWithConcurrency(downloadTasks, concurrency = 5) {
+  const results = [];
+  let index = 0;
+  
+  async function downloadNext() {
+    if (index >= downloadTasks.length) return;
+    
+    const currentIndex = index++;
+    const task = downloadTasks[currentIndex];
+    
+    try {
+      await downloadImage(task.url, task.filepath);
+      console.log(`✅ Downloaded ${currentIndex + 1}/${downloadTasks.length}: ${task.filename}`);
+      results.push({ success: true, task });
+    } catch (error) {
+      console.error(`❌ Failed ${currentIndex + 1}/${downloadTasks.length}: ${task.filename} - ${error.message}`);
+      results.push({ success: false, task, error });
+    }
+    
+    // Download next task
+    await downloadNext();
+  }
+  
+  // Start concurrent downloads
+  const workers = Array(Math.min(concurrency, downloadTasks.length))
+    .fill()
+    .map(() => downloadNext());
+  
+  await Promise.all(workers);
+  return results;
+}
+
+async function main() {
+  console.log('🚀 Starting export of good images...');
+  
+  // Create output directories
+  createDirectories();
+  console.log(`📁 Created output directory: ${OUTPUT_DIR}`);
+  
+  // Query database for good images
+  console.log('🔍 Querying database for good images...');
+  const { data: entries, error } = await supabase
+    .from('word_entries')
+    .select('id, original_text, translation_text, image_url')
+    .eq('qa_score', 'good')
+    .not('image_url', 'is', null);
+  
+  if (error) {
+    console.error('❌ Database query failed:', error);
+    process.exit(1);
+  }
+  
+  if (!entries || entries.length === 0) {
+    console.log('ℹ️ No good images found in database');
+    return;
+  }
+  
+  console.log(`📊 Found ${entries.length} good images to export`);
+  
+  // Prepare download tasks
+  const downloadTasks = entries.map((entry) => {
+    const filename = `${entry.id}.png`;
+    const filepath = path.join(IMAGES_DIR, filename);
+    
+    return {
+      id: entry.id,
+      url: entry.image_url,
+      filename,
+      filepath,
+      original: entry.original_text,
+      translation: entry.translation_text
+    };
+  });
+  
+  // Start downloads
+  console.log('⬇️ Starting downloads (5 concurrent)...');
+  const results = await downloadWithConcurrency(downloadTasks, 5);
+  
+  // Summary
+  const successful = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+  
+  console.log('\n📈 Export Summary:');
+  console.log(`✅ Successful: ${successful}`);
+  console.log(`❌ Failed: ${failed}`);
+  console.log(`📁 Images saved to: ${IMAGES_DIR}`);
+  
+  if (failed > 0) {
+    console.log('\n❌ Failed downloads:');
+    results
+      .filter(r => !r.success)
+      .forEach(r => console.log(`   ${r.task.filename}: ${r.error.message}`));
+  }
+  
+  console.log('\n🎉 Export completed!');
+}
+
+main().catch((error) => {
+  console.error('💥 Unexpected error:', error);
+  process.exit(1);
+});
+</file>
+
 <file path="supabase/.gitignore">
 # Supabase
 .branches
@@ -1355,86 +1900,6 @@ migrateToSQLite().catch(console.error);
 {
   "extends": ["next/core-web-vitals", "next/typescript"]
 }
-</file>
-
-<file path="plan.md">
-# Simple One-Time Export Plan: Good Images
-
-## Overview
-Since this is a one-time export task, we should use the simplest possible approach:
-**A single Node.js script that directly queries the database and downloads images.**
-
-## Why This is Better
-1. **No API needed** - Script connects directly to Supabase
-2. **No UI integration** - Just run the script once
-3. **No caching/rate limiting** - Not a production feature
-4. **No complex architecture** - Keep it simple
-
-## Single Script Approach
-
-### File: `scripts/export-good-images.js`
-
-**What it does:**
-1. Connect directly to Supabase using the service role key
-2. Query for all `qa_score = 'good'` entries with `image_url`
-3. Download images to local folder with meaningful names
-
-**Directory structure:**
-```
-good-images-export/
-├── images/
-│   ├── 001-apple-яблоко.png
-│   ├── 002-cat-кот.png
-│   └── ...
-```
-
-**Dependencies:**
-- `@supabase/supabase-js` (already in project)
-- `node-fetch` for downloads
-- Built-in `fs` and `path` modules
-
-## Implementation Steps (2-3 hours total)
-
-### Step 1: Create the script (1 hour)
-- [ ] Create `scripts/export-good-images.js`
-- [ ] Add Supabase connection using existing env vars
-- [ ] Query database for good images
-- [ ] Basic download logic
-
-### Step 2: Add download features (1 hour)
-- [ ] Parallel downloads (5 at a time)
-- [ ] Progress logging to console
-- [ ] Error handling for failed downloads
-
-### Step 3: Test and run (30 min)
-- [ ] Test with 10 images first
-- [ ] Run full export
-- [ ] Verify all images downloaded correctly
-
-## Script Usage
-```bash
-cd scripts
-node export-good-images.js
-```
-
-## What You Get
-- All good images in `good-images-export/images/` folder
-- Files named: `{id}.png`
-- Console output showing progress
-
-## No Additional Features Needed
-- No resume capability (if it fails, just run again - it's fast)
-- No zip creation (you can zip the folder manually if needed)
-- No UI integration (one-time task)
-- No rate limiting (direct DB access)
-- No authentication (script runs locally with your keys)
-
-## Why This is Much Better
-1. **2-3 hours vs 12-14 hours** - 75% time savings
-2. **Single file vs multiple files** - Much simpler
-3. **No production code** - Won't affect the main app
-4. **Direct and reliable** - No API layer to fail
-5. **Perfect for one-time use** - Exactly what you need
 </file>
 
 <file path="prompt_overrides.yaml">
@@ -2604,6 +3069,86 @@ s3_region = "env(S3_REGION)"
 s3_access_key = "env(S3_ACCESS_KEY)"
 # Configures AWS_SECRET_ACCESS_KEY for S3 bucket
 s3_secret_key = "env(S3_SECRET_KEY)"
+</file>
+
+<file path="plan.md">
+# Simple One-Time Export Plan: Good Images
+
+## Overview
+Since this is a one-time export task, we should use the simplest possible approach:
+**A single Node.js script that directly queries the database and downloads images.**
+
+## Why This is Better
+1. **No API needed** - Script connects directly to Supabase
+2. **No UI integration** - Just run the script once
+3. **No caching/rate limiting** - Not a production feature
+4. **No complex architecture** - Keep it simple
+
+## Single Script Approach
+
+### File: `scripts/export-good-images.js`
+
+**What it does:**
+1. Connect directly to Supabase using the service role key
+2. Query for all `qa_score = 'good'` entries with `image_url`
+3. Download images to local folder with meaningful names
+
+**Directory structure:**
+```
+good-images-export/
+├── images/
+│   ├── 001-apple-яблоко.png
+│   ├── 002-cat-кот.png
+│   └── ...
+```
+
+**Dependencies:**
+- `@supabase/supabase-js` (already in project)
+- `node-fetch` for downloads
+- Built-in `fs` and `path` modules
+
+## Implementation Steps (2-3 hours total)
+
+### Step 1: Create the script (1 hour)
+- [ ] Create `scripts/export-good-images.js`
+- [ ] Add Supabase connection using existing env vars
+- [ ] Query database for good images
+- [ ] Basic download logic
+
+### Step 2: Add download features (1 hour)
+- [ ] Parallel downloads (5 at a time)
+- [ ] Progress logging to console
+- [ ] Error handling for failed downloads
+
+### Step 3: Test and run (30 min)
+- [ ] Test with 10 images first
+- [ ] Run full export
+- [ ] Verify all images downloaded correctly
+
+## Script Usage
+```bash
+cd scripts
+node export-good-images.js
+```
+
+## What You Get
+- All good images in `good-images-export/images/` folder
+- Files named: `{id}.png`
+- Console output showing progress
+
+## No Additional Features Needed
+- No resume capability (if it fails, just run again - it's fast)
+- No zip creation (you can zip the folder manually if needed)
+- No UI integration (one-time task)
+- No rate limiting (direct DB access)
+- No authentication (script runs locally with your keys)
+
+## Why This is Much Better
+1. **2-3 hours vs 12-14 hours** - 75% time savings
+2. **Single file vs multiple files** - Much simpler
+3. **No production code** - Won't affect the main app
+4. **Direct and reliable** - No API layer to fail
+5. **Perfect for one-time use** - Exactly what you need
 </file>
 
 <file path="postcss.config.mjs">
@@ -4220,225 +4765,6 @@ export class LanguageCardRepository {
 export const languageCardRepository = new LanguageCardRepository();
 </file>
 
-<file path="lib/apiClient.ts">
-import { WordEntry, CategorizationResult } from '@/types';
-
-// Generic API response type
-export interface ApiResponse<T = any> {
-  data?: T;
-  error?: string;
-  status: number;
-}
-
-// Request payload types
-export interface GeneratePromptPayload {
-  entryId: number;
-  english: string;
-  russian: string;
-  transcription: string;
-}
-
-export interface QueueImagePayload {
-  action: 'add';
-  entryId: number;
-  englishWord: string;
-  prompt: string;
-}
-
-export interface GeneratePromptsBatchPayload {
-  entries: Array<{
-    id: number;
-    english: string;
-    russian: string;
-    transcription: string;
-  }>;
-}
-
-export interface CategorizeVocabularyPayload {
-  entries: Array<{
-    id: number;
-    original_text: string;
-    translation_text: string;
-    level_id: number;
-  }>;
-}
-
-export interface RegenerateImagePayload {
-  entryId: number;
-  prompt: string;
-}
-
-export interface LanguageCardsPayload {
-  word: string;
-}
-
-export interface BatchGenerateImagesPayload {
-  entries: Array<{
-    entryId: number;
-    prompt: string;
-    englishWord: string;
-  }>;
-}
-
-// Response types
-export interface GeneratePromptResponse {
-  prompt: string;
-}
-
-export interface QueueImageResponse {
-  status: string;
-  imageUrl?: string;
-  generatedAt?: string;
-}
-
-export interface GeneratePromptsBatchResponse {
-  prompts: Array<{
-    id: number;
-    prompt: string;
-  }>;
-}
-
-export interface CategorizeVocabularyResponse {
-  results: Array<{
-    id: number;
-    categorization: CategorizationResult;
-  }>;
-  errors: Array<{
-    id: number;
-    error: string;
-  }>;
-}
-
-export interface RegenerateImageResponse {
-  success: boolean;
-  imageUrl?: string;
-  generatedAt?: string;
-  error?: string;
-}
-
-export interface LanguageCardsResponse {
-  cards: WordEntry[];
-  totalWords: number;
-}
-
-export interface BatchGenerateImagesResponse {
-  success: boolean;
-  message: string;
-  queuedCount: number;
-  errorCount: number;
-  errors?: Array<{
-    entryId: number;
-    error: string;
-  }>;
-}
-
-// Generic API call utility
-async function apiCall<T>(
-  endpoint: string,
-  options: {
-    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
-    body?: any;
-  } = {}
-): Promise<ApiResponse<T>> {
-  const { method = 'GET', body } = options;
-
-  try {
-    const response = await fetch(endpoint, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      ...(body && { body: JSON.stringify(body) }),
-    });
-
-    const status = response.status;
-
-    if (!response.ok) {
-      // Try to parse error message from response
-      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-      return {
-        error: errorData.error || `HTTP ${status}`,
-        status,
-      };
-    }
-
-    const data = await response.json();
-    return {
-      data,
-      status,
-    };
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : 'Network error',
-      status: 0,
-    };
-  }
-}
-
-// Service functions
-export async function generatePromptService(
-  payload: GeneratePromptPayload
-): Promise<ApiResponse<GeneratePromptResponse>> {
-  return apiCall<GeneratePromptResponse>('/api/generate-prompt', {
-    method: 'POST',
-    body: payload,
-  });
-}
-
-export async function queueImageService(
-  payload: QueueImagePayload
-): Promise<ApiResponse<QueueImageResponse>> {
-  return apiCall<QueueImageResponse>('/api/queue-image', {
-    method: 'POST',
-    body: payload,
-  });
-}
-
-export async function generatePromptsBatchService(
-  payload: GeneratePromptsBatchPayload
-): Promise<ApiResponse<GeneratePromptsBatchResponse>> {
-  return apiCall<GeneratePromptsBatchResponse>('/api/generate-prompts-batch', {
-    method: 'POST',
-    body: payload,
-  });
-}
-
-export async function categorizeVocabularyService(
-  payload: CategorizeVocabularyPayload
-): Promise<ApiResponse<CategorizeVocabularyResponse>> {
-  return apiCall<CategorizeVocabularyResponse>('/api/categorize-vocabulary', {
-    method: 'POST',
-    body: payload,
-  });
-}
-
-export async function regenerateImageService(
-  payload: RegenerateImagePayload
-): Promise<ApiResponse<RegenerateImageResponse>> {
-  return apiCall<RegenerateImageResponse>('/api/generate-image', {
-    method: 'POST',
-    body: payload,
-  });
-}
-
-export async function fetchLanguageCardsService(
-  payload: LanguageCardsPayload
-): Promise<ApiResponse<LanguageCardsResponse>> {
-  return apiCall<LanguageCardsResponse>(`/api/language-cards?word=${encodeURIComponent(payload.word)}`, {
-    method: 'GET',
-  });
-}
-
-export async function batchGenerateImagesService(
-  payload: BatchGenerateImagesPayload
-): Promise<ApiResponse<BatchGenerateImagesResponse>> {
-  return apiCall<BatchGenerateImagesResponse>('/api/generate-images-batch', {
-    method: 'POST',
-    body: payload,
-  });
-}
-</file>
-
 <file path="lib/batchUtils.ts">
 import { WordEntry } from '@/types';
 import { ApiResponse } from './apiClient';
@@ -4590,120 +4916,6 @@ export async function processBatch<TPayload, TResult extends { id: number }, TEr
     totalFailed
   };
 }
-</file>
-
-<file path=".gitignore">
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
-/node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
-
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# generated images
-/public/images
-
-# database files
-/data/*.db
-/data/*.db-journal
-/data/*.db-wal
-/data/*.db-shm
-/data/*.backup-*
-*.db
-*.db-journal
-*.db-wal
-*.db-shm
-
-# localStorage exports
-language-cards-export.json
-localStorage-backup-*.json
-.localStorage-backup.json
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-
-# IDE / Editor files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
-
-# OS files
-Thumbs.db
-.Spotlight-V100
-.Trashes
-
-# Temporary files
-*.tmp
-*.temp
-.tmp/
-.temp/
-
-# Build artifacts
-dist/
-*.log
-
-# Tool-generated files
-repomix-output.xml
-repomix-output.txt
-
-# Backup files
-*.backup
-*.bak
-*.old
-
-# Archive files
-*.zip
-*.tar.gz
-*.rar
-
-# Nodemon
-nodemon.json
-
-# Cache directories
-.cache/
-.parcel-cache/
-
-repomix-output.xml
 </file>
 
 <file path="components/Gallery.tsx">
@@ -5045,6 +5257,231 @@ export default function Gallery() {
 }
 </file>
 
+<file path="lib/apiClient.ts">
+import { WordEntry, CategorizationResult } from '@/types';
+
+// Generic API response type
+export interface ApiResponse<T = any> {
+  data?: T;
+  error?: string;
+  status: number;
+}
+
+// Request payload types
+export interface GeneratePromptPayload {
+  entryId: number;
+  english: string;
+  russian: string;
+  transcription: string;
+}
+
+export interface QueueImagePayload {
+  action: 'add';
+  entryId: number;
+  englishWord: string;
+  prompt: string;
+}
+
+export interface GeneratePromptsBatchPayload {
+  entries: Array<{
+    id: number;
+    english: string;
+    russian: string;
+    transcription: string;
+  }>;
+}
+
+export interface CategorizeVocabularyPayload {
+  entries: Array<{
+    id: number;
+    original_text: string;
+    translation_text: string;
+    level_id: number;
+  }>;
+}
+
+export interface RegenerateImagePayload {
+  entryId: number;
+  prompt: string;
+}
+
+export interface LanguageCardsPayload {
+  word: string;
+}
+
+export interface BatchGenerateImagesPayload {
+  entries: Array<{
+    entryId: number;
+    prompt: string;
+    englishWord: string;
+  }>;
+}
+
+// Response types
+export interface GeneratePromptResponse {
+  prompt: string;
+}
+
+export interface QueueImageResponse {
+  status: string;
+  imageUrl?: string;
+  generatedAt?: string;
+}
+
+export interface GeneratePromptsBatchResponse {
+  prompts: Array<{
+    id: number;
+    prompt: string;
+  }>;
+}
+
+export interface CategorizeVocabularyResponse {
+  results: Array<{
+    id: number;
+    categorization: CategorizationResult;
+  }>;
+  errors: Array<{
+    id: number;
+    error: string;
+  }>;
+}
+
+export interface RegenerateImageResponse {
+  success: boolean;
+  imageUrl?: string;
+  generatedAt?: string;
+  error?: string;
+}
+
+export interface LanguageCardsResponse {
+  cards: WordEntry[];
+  totalWords: number;
+}
+
+export interface BatchGenerateImagesResponse {
+  success: boolean;
+  message: string;
+  queuedCount: number;
+  errorCount: number;
+  errors?: Array<{
+    entryId: number;
+    error: string;
+  }>;
+}
+
+// Generic API call utility
+async function apiCall<T>(
+  endpoint: string,
+  options: {
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+    body?: any;
+  } = {}
+): Promise<ApiResponse<T>> {
+  const { method = 'GET', body } = options;
+
+  try {
+    const response = await fetch(endpoint, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      ...(body && { body: JSON.stringify(body) }),
+    });
+
+    const status = response.status;
+
+    if (!response.ok) {
+      // Try to parse error message from response
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      return {
+        error: errorData.error || `HTTP ${status}`,
+        status,
+      };
+    }
+
+    const data = await response.json();
+    return {
+      data,
+      status,
+    };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : 'Network error',
+      status: 0,
+    };
+  }
+}
+
+// Service functions
+export async function generatePromptService(
+  payload: GeneratePromptPayload
+): Promise<ApiResponse<GeneratePromptResponse>> {
+  return apiCall<GeneratePromptResponse>('/api/generate-prompt', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function queueImageService(
+  payload: QueueImagePayload
+): Promise<ApiResponse<QueueImageResponse>> {
+  return apiCall<QueueImageResponse>('/api/queue-image', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function generatePromptsBatchService(
+  payload: GeneratePromptsBatchPayload
+): Promise<ApiResponse<GeneratePromptsBatchResponse>> {
+  return apiCall<GeneratePromptsBatchResponse>('/api/generate-prompts-batch', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function categorizeVocabularyService(
+  payload: CategorizeVocabularyPayload
+): Promise<ApiResponse<CategorizeVocabularyResponse>> {
+  return apiCall<CategorizeVocabularyResponse>('/api/categorize-vocabulary', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function regenerateImageService(
+  payload: RegenerateImagePayload
+): Promise<ApiResponse<RegenerateImageResponse>> {
+  return apiCall<RegenerateImageResponse>('/api/generate-image', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function fetchLanguageCardsService(
+  payload: LanguageCardsPayload
+): Promise<ApiResponse<LanguageCardsResponse>> {
+  return apiCall<LanguageCardsResponse>(`/api/language-cards?word=${encodeURIComponent(payload.word)}`, {
+    method: 'GET',
+  });
+}
+
+export async function batchGenerateImagesService(
+  payload: BatchGenerateImagesPayload
+): Promise<ApiResponse<BatchGenerateImagesResponse>> {
+  return apiCall<BatchGenerateImagesResponse>('/api/generate-images-batch', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export async function clearQueueService(): Promise<ApiResponse<{ clearedCount: number }>> {
+  return apiCall<{ clearedCount: number }>('/api/clear-queue', {
+    method: 'POST',
+  });
+}
+</file>
+
 <file path="store/useAppStore.ts">
 import { create } from 'zustand';
 import { WordEntry, AppState } from '@/types';
@@ -5231,6 +5668,120 @@ export const useAppStore = create<AppStore>()((set, get) => ({
 if (typeof window !== 'undefined') {
   useAppStore.getState().loadFromDatabase();
 }
+</file>
+
+<file path=".gitignore">
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# generated images
+/public/images
+
+# database files
+/data/*.db
+/data/*.db-journal
+/data/*.db-wal
+/data/*.db-shm
+/data/*.backup-*
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# localStorage exports
+language-cards-export.json
+localStorage-backup-*.json
+.localStorage-backup.json
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# OS files
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# Build artifacts
+dist/
+*.log
+
+# Tool-generated files
+repomix-output.xml
+repomix-output.txt
+
+# Backup files
+*.backup
+*.bak
+*.old
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar
+
+# Nodemon
+nodemon.json
+
+# Cache directories
+.cache/
+.parcel-cache/
+
+repomix-output.xml
 </file>
 
 <file path="CLAUDE.md">
@@ -6295,12 +6846,22 @@ class ImageGenerationQueue {
       // Update the database with the new image URL and status
       const generatedAt = new Date().toISOString();
       try {
-        await languageCardRepository.update(item.entryId, {
+        // First, get the current entry to check if it had a bad QA score
+        const currentEntry = await languageCardRepository.findById(item.entryId);
+        const updateData = {
           imageUrl: uploadResult.imageUrl,
-          imageStatus: 'completed',
+          imageStatus: 'completed' as const,
           replicateId: item.predictionId,
           imageGeneratedAt: generatedAt,
-        });
+          ...(currentEntry && currentEntry.qaScore === 'bad' ? { qaScore: null } : {})
+        };
+        
+        // If this entry had a bad QA score, reset it to null so it can be re-evaluated
+        if (currentEntry && currentEntry.qaScore === 'bad') {
+          console.log(`[DB] Resetting QA score for entry ID ${item.entryId} (was 'bad')`);
+        }
+        
+        await languageCardRepository.update(item.entryId, updateData);
         console.log(`[DB] Successfully updated entry ID ${item.entryId} with new image.`);
       } catch (dbError) {
         console.error(`[DB] CRITICAL: Failed to update database for entry ID ${item.entryId} after successful image generation and upload.`, dbError);
@@ -6392,6 +6953,15 @@ class ImageGenerationQueue {
     }));
   }
 
+  // Clear the entire queue
+  clearQueue() {
+    const clearedCount = this.queue.length;
+    this.queue = [];
+    this.processing = false;
+    console.log(`Cleared ${clearedCount} items from image generation queue`);
+    return clearedCount;
+  }
+
   // Callback methods (to be overridden)
   protected notifyCompletion(item: QueueItem, _result: NotifyCompletionResult) {
     // Override this method to handle completion
@@ -6439,6 +7009,7 @@ import {
   generatePromptsBatchService,
   categorizeVocabularyService,
   batchGenerateImagesService,
+  clearQueueService,
 } from '@/lib/apiClient';
 import { processBatch } from '@/lib/batchUtils';
 
@@ -6782,6 +7353,43 @@ export default function DataTable() {
     await startBatchImageGeneration(eligibleEntries);
   };
 
+  const handleBatchRegenerateBadImages = async () => {
+    // Get all entries from the store to ensure we find all bad entries, not just filtered ones.
+    const allEntries = useAppStore.getState().entries;
+    const badEntriesWithPrompts = allEntries.filter(
+      entry => entry.qaScore === 'bad' && 
+      entry.prompt && 
+      entry.prompt.trim() !== ''
+    );
+
+    if (badEntriesWithPrompts.length === 0) {
+      toast.error('No "bad" entries with prompts found to regenerate.');
+      return;
+    }
+
+    activityManager.addActivity('info', `Starting image regeneration for ${badEntriesWithPrompts.length} bad entries...`);
+
+    // Process in chunks to avoid overwhelming the system
+    const CHUNK_SIZE = 500;
+    let processed = 0;
+    
+    while (processed < badEntriesWithPrompts.length) {
+      const chunk = badEntriesWithPrompts.slice(processed, processed + CHUNK_SIZE);
+      activityManager.addActivity('info', `Queueing batch ${Math.floor(processed / CHUNK_SIZE) + 1} (${chunk.length} images)...`);
+      
+      await startBatchImageGeneration(chunk);
+      processed += chunk.length;
+      
+      // Add a small delay between chunks
+      if (processed < badEntriesWithPrompts.length) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+    
+    activityManager.addActivity('success', `All ${badEntriesWithPrompts.length} bad images have been queued for regeneration!`);
+    toast.success(`Queued all ${badEntriesWithPrompts.length} bad images for regeneration!`);
+  };
+
   const handleBatchRefreshBadPrompts = async () => {
     // Filter entries with bad QA score
     const badEntries = filteredData.filter(entry => entry.qaScore === 'bad');
@@ -6833,6 +7441,29 @@ export default function DataTable() {
     const message = `Refreshed ${result.totalSuccess} prompts. ${result.totalFailed > 0 ? `${result.totalFailed} failed.` : ''}`;
     activityManager.addActivity('info', message);
     toast.success(message);
+  };
+
+  const handleClearQueue = async () => {
+    if (!confirm('Are you sure you want to clear the entire image generation queue? This will remove all pending and processing items.')) {
+      return;
+    }
+
+    try {
+      activityManager.addActivity('info', 'Clearing image generation queue...');
+      const result = await clearQueueService();
+      
+      if (result.data) {
+        activityManager.addActivity('success', `Cleared ${result.data.clearedCount} items from the queue`);
+        toast.success(`Cleared ${result.data.clearedCount} items from the queue`);
+      } else {
+        activityManager.addActivity('error', `Failed to clear queue: ${result.error}`);
+        toast.error(`Failed to clear queue: ${result.error}`);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      activityManager.addActivity('error', `Error clearing queue: ${errorMessage}`);
+      toast.error(`Error clearing queue: ${errorMessage}`);
+    }
   };
 
   const handleCleanupDescriptivePrompts = async () => {
@@ -7244,6 +7875,27 @@ export default function DataTable() {
         >
           <RefreshCcw className="h-4 w-4" />
           Refresh Bad Prompts ({filteredData.filter(entry => entry.qaScore === 'bad').length})
+        </button>
+
+        {/* Regenerate Bad Images Button */}
+        <button
+          onClick={handleBatchRegenerateBadImages}
+          disabled={filteredData.filter(entry => entry.qaScore === 'bad').length === 0}
+          className="btn-secondary bg-purple-600 hover:bg-purple-700 text-white flex items-center gap-2"
+          title="Regenerate images for all bad entries using their existing prompts"
+        >
+          <ImageIcon className="h-4 w-4" />
+          Regen Bad Images ({filteredData.filter(entry => entry.qaScore === 'bad').length})
+        </button>
+
+        {/* Clear Queue Button */}
+        <button
+          onClick={handleClearQueue}
+          className="btn-secondary bg-red-600 hover:bg-red-700 text-white flex items-center gap-2"
+          title="Clear all items from the image generation queue"
+        >
+          <X className="h-4 w-4" />
+          Clear Queue
         </button>
 
         {/* Cleanup Descriptive Prompts Button */}

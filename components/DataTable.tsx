@@ -16,6 +16,7 @@ import { ChevronUp, ChevronDown, Search, Filter, Sparkles, ImageIcon, Edit2, Sav
 import toast from 'react-hot-toast';
 import { activityManager } from './ActivityLog';
 import { BatchActionMenu } from './BatchActionMenu';
+import { PaginationControls } from './PaginationControls';
 import {
   generatePromptService,
   queueImageService,
@@ -969,31 +970,20 @@ export default function DataTable() {
         <div className="text-sm text-gray-400">
           Showing {Math.min((currentPage - 1) * itemsPerPage + 1, filteredData.length)} to {Math.min(currentPage * itemsPerPage, filteredData.length)} of {filteredData.length} entries
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => {
-              table.previousPage();
-              setCurrentPage(currentPage - 1);
-            }}
-            disabled={!table.getCanPreviousPage()}
-            className="btn-secondary"
-          >
-            ← PREV
-          </button>
-          <span className="flex items-center px-3 text-sm text-gray-400">
-            Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-          </span>
-          <button
-            onClick={() => {
-              table.nextPage();
-              setCurrentPage(currentPage + 1);
-            }}
-            disabled={!table.getCanNextPage()}
-            className="btn-secondary"
-          >
-            NEXT →
-          </button>
-        </div>
+        <PaginationControls
+          currentPage={table.getState().pagination.pageIndex + 1}
+          pageCount={table.getPageCount()}
+          canPreviousPage={table.getCanPreviousPage()}
+          canNextPage={table.getCanNextPage()}
+          onPreviousPage={() => {
+            table.previousPage();
+            setCurrentPage(currentPage - 1);
+          }}
+          onNextPage={() => {
+            table.nextPage();
+            setCurrentPage(currentPage + 1);
+          }}
+        />
       </div>
     </div>
   );

@@ -8,9 +8,10 @@ import toast from 'react-hot-toast';
 import { activityManager } from './ActivityLog';
 import { queueImageService, generatePromptsBatchService } from '@/lib/apiClient';
 import { processBatch } from '@/lib/batchUtils';
+import { PaginationControls } from './PaginationControls';
 
 export default function Gallery() {
-  const { entries, updateEntry } = useAppStore();
+  const { entries, updateEntry, currentPage, setCurrentPage, itemsPerPage } = useAppStore();
   const [qaFilter, setQaFilter] = useState<'all' | 'good' | 'bad' | 'unrated'>('all');
   const [galleryImages, setGalleryImages] = useState<any[]>([]);
 
@@ -75,6 +76,12 @@ export default function Gallery() {
     
     return filtered;
   }, [allImages, qaFilter]);
+
+  // Pagination logic
+  const pageCount = Math.ceil(filteredEntries.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedEntries = filteredEntries.slice(startIndex, endIndex);
 
   const handleQaScore = (entryId: number, score: 'good' | 'bad') => {
     updateEntry(entryId, { qaScore: score });
@@ -257,7 +264,7 @@ export default function Gallery() {
 
       {/* Gallery Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-3">
-        {filteredEntries.map((entry) => {
+        {paginatedEntries.map((entry) => {
           return (
             <div key={entry.id} className="bg-gray-900 border border-gray-700 rounded overflow-hidden group hover:border-gray-600 transition-colors">
               {/* Compact Image Display */}
@@ -330,6 +337,21 @@ export default function Gallery() {
             </div>
           );
         })}
+      </div>
+
+      {/* Pagination */}
+      <div className="mt-6 flex items-center justify-between">
+        <div className="text-sm text-gray-400">
+          Showing {Math.min(startIndex + 1, filteredEntries.length)} to {Math.min(endIndex, filteredEntries.length)} of {filteredEntries.length} images
+        </div>
+        <PaginationControls
+          currentPage={currentPage}
+          pageCount={pageCount}
+          canPreviousPage={currentPage > 1}
+          canNextPage={currentPage < pageCount}
+          onPreviousPage={() => setCurrentPage(currentPage - 1)}
+          onNextPage={() => setCurrentPage(currentPage + 1)}
+        />
       </div>
     </div>
   );
