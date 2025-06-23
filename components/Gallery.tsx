@@ -269,8 +269,8 @@ export default function Gallery() {
             <div key={entry.id} className="bg-gray-900 border border-gray-700 rounded overflow-hidden group hover:border-gray-600 transition-colors">
               {/* Compact Image Display */}
               <div className="relative w-full aspect-square">
-                <img
-                  src={entry.imageUrl!}
+                  <img
+    src={`${entry.imageUrl}?t=${entry.imageGeneratedAt ? new Date(entry.imageGeneratedAt).getTime() : Date.now()}`}
                   alt={entry.original_text}
                   className="w-full h-full object-contain bg-gray-800"
                 />
