@@ -91,6 +91,11 @@ dist/
 repomix-output.xml
 repomix-output.txt
 
+# Export folders
+good-images-export/
+non-good-images-export/
+images-export-by-qa/
+
 # Backup files
 *.backup
 *.bak
